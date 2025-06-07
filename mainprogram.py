@@ -8,9 +8,10 @@ master.title("Mini Flasher")
 # Programmable variables
 intensity_color = 'dark'
 off_time_color = 'secondary'
-select_text = "Not Selected!"
+select_text = "Please Select"
 add_row_button_text = "Add New Color"
 max_on_off_time = 100
+max_row = 250
 
 # Window Parameters
 master.geometry("1000x600")
