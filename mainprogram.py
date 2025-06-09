@@ -184,9 +184,10 @@ def send_action():
     payload = ""
     for i in range(len(params)):
         for j in range(len(params[i-1])):
-            payload = payload + str(params[i][j]) + ","
+            payload += str(params[i][j]) + ","
+    payload += "C," + str(cycles.get())
             
-    print("INFO: Payload to be send: {0}".format(payload[:-1]))
+    print("INFO: Payload to be send: {0}".format(payload))
     # To be tested later.
     # packet = build_packet(payload[:-1])
     # send_usb(port_num, BAUDRATE, packet)
