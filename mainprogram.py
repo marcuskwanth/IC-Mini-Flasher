@@ -2,6 +2,12 @@
 IC-Project : Mini-Flasher GUI - build 0612
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
+
+To-do:
+1. Add instructions on how to find the COM number.
+2. Error control for the spinboxes, when they exceed predefined max number.
+3. Function to send requesting packet data to the ESP32 and reflect the settings.
+4. Function to save the setting preference to another text file (settings.txt).
 """
 
 import tkinter as tk
@@ -12,13 +18,15 @@ import serial, serial.tools.list_ports, os
 
 import bluetooth
 """
-Package "pybluez", please follow this github comment for proper installation, and 
-make sure Microsoft Visual C++ 14.0 is installed: 
+Package "pybluez", please follow this github comment for proper installation, make sure to install backports.tarfile first. 
 https://github.com/pybluez/pybluez/issues/431#issuecomment-2191842543
+For Windows user, pls make sure Microsoft Visual C++ 14.0 is installed 
+For macOS user, pls make sure to install python-lightblue.
 """
 
 # ──────────────── Global configuration ───────────────────────────────
 CONFIG_FILE         = "config.txt"
+SETTING_FILE        = "settings.txt"
 TARGET_PORT         = 1         # 1 For BT-SPP!
 BAUDRATE            = 115_200
 HEADER1, HEADER2    = 0x5A, 0xA5
@@ -323,6 +331,7 @@ def update_row_style(i):
     if i >= len(rows): return
     style = colors_mapper.get(rows[i]['vars']['color'].get(), "secondary")
     rows[i]['widgets'][0].configure(bootstyle=style)
+    rows[i]['widgets'][2].configure(bootstyle=style)
     rows[i]['widgets'][4].configure(bootstyle=style)
 
 """Callback for the add row button"""
@@ -336,11 +345,13 @@ def add_new_row():
          'intensity': ttk.IntVar(value=255),
          'on_time':   ttk.IntVar(value=1),
          'off_time':  ttk.IntVar(value=1)}
-    on_label, off_label = ttk.Label(table), ttk.Label(table)
-
-    on_update  = lambda val: on_label.config(text=str(int(float(val))))
-    off_update = lambda val: off_label.config(text=str(int(float(val))))
     
+    on_spin = ttk.Spinbox(table, textvariable=v['on_time'], from_=1, to=max_on_off_time, width=5, bootstyle="secondary")
+    off_spin = ttk.Spinbox(table, textvariable=v['off_time'], from_=1, to=max_on_off_time, width=5, bootstyle=off_time_color)
+
+    on_update  = lambda val: v['on_time'].set(int(float(val)))
+    off_update = lambda val: v['off_time'].set(int(float(val)))
+
     col_button = ttk.Menubutton(table, text=v['color'].get(), width=12, bootstyle="secondary")
     menu = tk.Menu(col_button); col_button['menu'] = menu
     def choose(c):
@@ -354,14 +365,12 @@ def add_new_row():
     w = [
         col_button,
         ttk.Spinbox(table, textvariable=v['intensity'], from_=1, to=255, width=3, bootstyle=intensity_color),
-        on_label, 
-        off_label,
+        on_spin,
+        off_spin,
         ttk.Scale(table, variable=v['on_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=on_update, bootstyle="secondary"),
         ttk.Scale(table, variable=v['off_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=off_update, bootstyle=off_time_color),
         del_button
     ]
-
-    on_update(v['on_time'].get()); off_update(v['off_time'].get())
 
     for col, widget in enumerate(w):
         widget.grid(row=i+1, column=col, padx=5, pady=5, sticky="nsew")
