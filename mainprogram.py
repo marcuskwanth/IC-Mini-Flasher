@@ -1,36 +1,35 @@
 """
-IC-Project : Mini-Flasher GUI - build 0612
+IC-Project : Mini-Flasher GUI - build 0618
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
-1. Add instructions on how to find the COM number.
-2. Error control for the spinboxes, when they exceed predefined max number.
-3. Function to send requesting packet data to the ESP32 and reflect the settings.
-4. Function to save the setting preference to another text file (settings.txt).
+1. Error control for the spinboxes, when they exceed predefined max number.
+2. Function to send requesting packet data to the ESP32 and reflect the settings.
+3. Function to save the setting preference to another text file (settings.txt).
 """
 
 import tkinter as tk
 from tkinter import messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
-import serial, serial.tools.list_ports, os
+import serial, serial.tools.list_ports, json, subprocess, os, time
 
-import bluetooth
+import bluetooth, glob, platform
 """
-Package "pybluez", please follow this github comment for proper installation, make sure to install backports.tarfile first. 
+Package "pybluez", please follow this github comment for proper installation, make sure to pip install backports.tarfile first. 
 https://github.com/pybluez/pybluez/issues/431#issuecomment-2191842543
 For Windows user, pls make sure Microsoft Visual C++ 14.0 is installed 
-For macOS user, pls make sure to install python-lightblue.
+For macOS user, pls make sure to pip install python-lightblue
 """
 
 # ──────────────── Global configuration ───────────────────────────────
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
-TARGET_PORT         = 1         # 1 For BT-SPP!
+TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
 HEADER1, HEADER2    = 0x5A, 0xA5
-READ_TIMEOUT        = 0.3       # seconds for optional loop-back read
+READ_TIMEOUT        = 0.3               # seconds for optional loop-back read
 
 intensity_color     = 'dark'
 off_time_color      = 'secondary'
@@ -41,7 +40,7 @@ info_prefix         = "*INFO: "
 error_prefix        = "*ERROR: "
 default_cycles      = 5
 max_on_off_time     = 100
-max_row             = 250     # max no. of table rows
+max_row             = 250               # max no. of table rows
 
 headers = ['Colors','Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On','MMI Off', 'Action']
 colors  = ["Red","Green","Blue","Infrared"]
@@ -62,16 +61,56 @@ bt_socket = None
 bt_connected = False
 bt_mac = tk.StringVar(value="")         # bluetooth mac address 
 
+"""For macOS troubleshooting: List the Bluetooth devices in a macOS serial format"""
+def list_bt_devices():
+    print("Available Bluetooth devices in /dev:")
+    print("\n".join(glob.glob("/dev/cu.*") + glob.glob("/dev/tty.*")))
+
 """Connect to the selected Bluetooth device"""
-# THE PART THAT NEEDS TROUBLESHOOTING!!!!!!!
 def connect_bluetooth():
     global bt_socket, bt_connected
     print(f"{info_prefix}Bluetooth MAC: {bt_mac.get()}")
     bt_addr = bt_mac.get()
-    bt_addr = bt_addr[bt_addr.index("(")+1:bt_addr.index(")")]
+    bt_name = bt_addr[:bt_addr.index("(")-1]
+    if "(" in bt_addr and ")" in bt_addr:
+        bt_addr = bt_addr[bt_addr.index("(")+1:bt_addr.index(")")]
+
+    # macOS handling
+    if platform.system() == "Darwin":
+        dev_ports = glob.glob("/dev/cu.*")
+        dev_path = None
+        for port in dev_ports:
+            if bt_name in port:
+                dev_path = port
+                break
+        if not dev_path:
+            print(f"{error_prefix}Could not find matching serial port for {bt_name}.")
+            messagebox.showerror("Error", f"Could not find serial port for {bt_name}.")
+            return False
+
+        try:
+            print(f"{info_prefix}Connecting to {dev_path}")
+            bt_socket = serial.Serial(
+                port=dev_path,
+                baudrate=BAUDRATE,
+                bytesize=serial.EIGHTBITS,
+                parity=serial.PARITY_NONE,
+                stopbits=serial.STOPBITS_ONE,
+                timeout=READ_TIMEOUT,
+                rtscts=False,
+                dsrdtr=False
+            )
+            bt_connected = True
+            print(f"{info_prefix}Connected via {dev_path}")
+            return True
+        except Exception as e:
+            print(f"{error_prefix}macOS connection failed: {e}")
+            messagebox.showerror("Error", f"macOS Bluetooth connection failed: {e}") 
+            return False
+
+    # Windows/Linux handling
     try:
-        # Create and connect socket
-        print(f"{info_prefix}Attempting connection with {bt_mac.get()}")
+        print(f"{info_prefix}Connecting to {bt_addr}")
         bt_socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
         bt_socket.connect((bt_addr, TARGET_PORT))
         bt_socket.settimeout(READ_TIMEOUT)
@@ -79,10 +118,22 @@ def connect_bluetooth():
         print(f"{info_prefix}Bluetooth connected to {bt_addr}")
         return True
     except Exception as e:
-        print(f"{error_prefix}Bluetooth connection failed: {e}")
+        print(f"{error_prefix}Connection failed: {e}")
         messagebox.showerror("Error", f"Bluetooth connection failed: {e}") 
         bt_connected = False
         return False
+
+def disconnect_bluetooth():
+    global bt_socket, bt_connected
+    if bt_socket:
+        try:
+            bt_socket.close()
+            print(f"{info_prefix}Bluetooth connection closed")
+        except Exception as e:
+            print(f"{error_prefix}Error closing Bluetooth: {e}")
+        finally:
+            bt_socket = None
+            bt_connected = False
 
 """Disconnect from Bluetooth device"""
 def disconnect_bluetooth():
@@ -91,26 +142,11 @@ def disconnect_bluetooth():
         try:
             bt_socket.close()
             print(f"{info_prefix}Bluetooth connection closed")
-        except:
-            pass
-    bt_socket = None
-    bt_connected = False
-
-"""Send data over Bluetooth connection"""
-def send_bluetooth(packet: bytes):
-    global bt_connected
-    if not bt_connected:
-        if not connect_bluetooth():
-            return
-    try:
-        # Send packet
-        bt_socket.send(packet)
-        print(f"{info_prefix}Sent {len(packet)} bytes via Bluetooth")
-        messagebox.showinfo("Info", f"Message sent to ESP32 successfully via Bluetooth {bt_mac}!")
-    except Exception as e:
-        print(f"{error_prefix}Bluetooth communication error: {e}")
-        messagebox.showerror("Error", f"Bluetooth communication failed: {e}") 
-        bt_connected = False
+        except Exception as e:
+            print(f"{error_prefix}Error closing Bluetooth: {e}")
+        finally:
+            bt_socket = None
+            bt_connected = False
 
 """Re-scan bluetooth device and repopulate combobox."""
 def refresh_bt_list(combo):
@@ -118,18 +154,52 @@ def refresh_bt_list(combo):
     combo.set("Scanning...")
     root.update()
     
+    # macOS discovery
+    if platform.system() == "Darwin":
+        try:
+            print(f"{info_prefix}Using macOS system profiler")
+            result = subprocess.run(
+                ["system_profiler", "SPBluetoothDataType", "-json"],
+                capture_output=True,
+                text=True
+            )
+            devices = []
+            if result.returncode == 0:
+                data = json.loads(result.stdout)
+                # Parse system_profiler output
+                for device in data.get("SPBluetoothDataType", [{}])[0].get("device_connected", []):
+                    if "device_address" in device:
+                        addr = device["device_address"]
+                        name = device.get("device_name", "Unknown")
+                        devices.append((addr, name))
+            if not devices:
+                print(f"{info_prefix}Trying blueutil fallback")
+                try:
+                    result = subprocess.run(
+                        ["blueutil", "--paired", "--format", "json"],
+                        capture_output=True,
+                        text=True
+                    )
+                    if result.returncode == 0:
+                        for device in json.loads(result.stdout):
+                            devices.append((device["address"], device["name"]))
+                except:
+                    pass
+            device_list = [f"{name} ({addr})" for addr, name in devices]
+            root.after(0, lambda: update_bt_list(combo, device_list))
+        except Exception as e:
+            print(f"{error_prefix}macOS Bluetooth scanning failed: {e}")
+            root.after(0, lambda: combo.set("Scan failed, try again"))
+        return
+
+    # other (Windows)
     try:
-        # Discover nearby devices
         devices = bluetooth.discover_devices(duration=8, lookup_names=True)
         print(f"{info_prefix}Found {len(devices)} Bluetooth devices")
-            
-        # Format device list: "Device Name (MAC Address)"
-        device_list = []
-        for addr, name in devices:
-            device_list.append(f"{name} ({addr})")
-            
-        root.after(0, lambda: update_bt_list(combo, device_list))
 
+        # Format device list: "Device Name (MAC Address)"
+        device_list = [f"{name} ({addr})" for addr, name in devices]
+        root.after(0, lambda: update_bt_list(combo, device_list))
     except Exception as e:
         print(f"{error_prefix}Bluetooth scanning failed: {e}")
         messagebox.showerror("Error", f"Bluetooth scanning failed: {e}") 
@@ -148,6 +218,36 @@ def update_bt_list(combo, device_list):
     
     combo["values"] = device_list
     combo.set(device_list[0])
+
+"""Send data over Bluetooth connection"""
+def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
+    global bt_connected
+    if not bt_connected:
+        if not connect_bluetooth():
+            return b""
+    try:
+        # macOS uses serial connection
+        if platform.system() == "Darwin":  
+            if not bt_socket.is_open:
+                bt_socket.open()  # Reopen if closed unexpectedly
+            bt_socket.reset_input_buffer()
+            bt_socket.reset_output_buffer()
+            bt_socket.write(packet)
+            bt_socket.flush()
+        else:  # Windows/Linux
+            bt_socket.send(packet)
+        echo = b""
+        if expect_echo:
+            echo = bt_socket.recv(expect_echo)
+            print(f"{info_prefix}Received echo: {bar_hex(echo)}")
+        print(f"{info_prefix}Sent {len(packet)} bytes via Bluetooth SPP: {bt_mac.get()}")
+        messagebox.showinfo("Info", f"Message sent to ESP32 successfully via Bluetooth!")
+        return echo
+    except Exception as e:
+        print(f"{error_prefix}Communication error: {e}")
+        messagebox.showerror("Error", f"Bluetooth failed: {e}") 
+        bt_connected = False
+        return b""
 
 # ──────────────── USB Serial utilities ──────────────────────────────
 port_var = tk.StringVar(value="")        # currently selected port
@@ -172,7 +272,7 @@ def refresh_port_list(combo):
         port_var.set("")
 
 """Open selected COM port, transmit packet, optionally read echo."""
-def send_usb(packet: bytes):
+def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
     port = port_var.get()
     if " " in port:                 # ← NEW: take only first token ► "COM4"
         port = port.split()[0]      
@@ -183,6 +283,10 @@ def send_usb(packet: bytes):
         with serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT) as ser:
             n = ser.write(packet)
             print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
+            if expect_echo:
+                echo = ser.read(expect_echo)
+                print(f"PC  echo  {bar_hex(echo)}")
+                return echo
             messagebox.showinfo("Info", f"Message sent to ESP32 successfully via USB serial {port}!")
     except serial.SerialException as e:
         print(f"{error_prefix}opening {port}: {e}")
@@ -311,8 +415,44 @@ def config_window():
         save_config(mode_var.get(), port_var.get(), bt_mac.get())
         update_status()
         config_win.destroy()
-    ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success", width=10).pack(side='right', padx=10)
-    ttk.Button(btn_frame, text="Cancel", command=config_win.destroy, bootstyle="secondary", width=10).pack(side='right')
+
+    # HELP FUNCTION: Shows instructions for finding ports/devices
+    def show_help():
+        help_text = """
+        How to find USB Serial Port / Bluetooth Host:
+        
+        USB Serial Port (COM Port):
+        1. Connect your ESP32 via USB
+        2. For Windows:
+           - Open Device Manager
+           - Expand 'Ports (COM & LPT)'
+           - Look for 'USB Serial Device (COMx)' or similar
+        3. For macOS:
+           - Open Terminal
+           - Run: ls /dev/cu.*
+           - Look for /dev/cu.usbserial-xxxx or similar
+        4. Click the Refresh button to update the list
+        
+        Bluetooth Device:
+        1. Ensure the designated device is powered on and in pairing mode
+        2. For Windows:
+           - Open Bluetooth settings
+           - Pair with the correct device
+           - Click the Refresh button to update the list
+        3. For macOS:
+           - Open System Preferences > Bluetooth
+           - Pair with the correct device
+           - Click the Refresh button to update the list
+        4. If device doesn't appear:
+           - Ensure it's not connected to another device
+           - Restart the designated device
+        """
+        messagebox.showinfo("Connection Help", help_text)
+
+    # Add Help button to button frame
+    ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info", width=5).pack(side='left', padx=20)
+    ttk.Button(btn_frame, text="Cancel", command=config_win.destroy, bootstyle="secondary", width=8).pack(side='right', padx=20)
+    ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success", width=8).pack(side='right')
 
     config_win.wait_window(config_win)
 
@@ -475,4 +615,11 @@ update_status()
 table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
 root.after(50, config_window)
+
+def on_closing():
+    print(f"{info_prefix}Closing app.")
+    disconnect_bluetooth()
+    root.destroy()
+
+root.protocol("WM_DELETE_WINDOW", on_closing)
 root.mainloop()
