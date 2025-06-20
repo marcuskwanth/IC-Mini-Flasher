@@ -4,9 +4,8 @@ IC-Project : Mini-Flasher GUI - build 0618
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
-1. Error control for the spinboxes, when they exceed predefined max number.
+1. Use status bar to replace pop ups for info
 2. Function to send requesting packet data to the ESP32 and reflect the settings.
-3. Function to save the setting preference to another text file (settings.txt).
 """
 
 import tkinter as tk
@@ -30,19 +29,26 @@ TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
 HEADER1, HEADER2    = 0x5A, 0xA5
 READ_TIMEOUT        = 0.3               # seconds for optional loop-back read
+COOLDOWN            = 10
 
+device_name         = "ESP32"
+last_send_time      = 0                 # Track when last send occurred
 intensity_color     = 'dark'
 off_time_color      = 'secondary'
 select_text         = "Select Color"
 delete_text         = "X"
 refresh_text        = "↻"
+add_row_text        = "Add Color Row"
+send_text           = "Send & Save"
 info_prefix         = "*INFO: "
 error_prefix        = "*ERROR: "
 default_cycles      = 5
+
+max_intensity       = 255
 max_on_off_time     = 100
 max_row             = 250               # max no. of table rows
 
-headers = ['Colors','Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On','MMI Off', 'Action']
+headers = ['Colors','Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
 colors  = ["Red","Green","Blue","Infrared"]
 colors_mapper = {
     "Red":"danger",
@@ -60,6 +66,8 @@ root.title("IC-Project  ·  Mini-Flasher GUI")
 bt_socket = None
 bt_connected = False
 bt_mac = tk.StringVar(value="")         # bluetooth mac address 
+
+mode_var = tk.IntVar(value=0)    # 0 = USB, 1 = Bluetooth
 
 """For macOS troubleshooting: List the Bluetooth devices in a macOS serial format"""
 def list_bt_devices():
@@ -122,18 +130,6 @@ def connect_bluetooth():
         messagebox.showerror("Error", f"Bluetooth connection failed: {e}") 
         bt_connected = False
         return False
-
-def disconnect_bluetooth():
-    global bt_socket, bt_connected
-    if bt_socket:
-        try:
-            bt_socket.close()
-            print(f"{info_prefix}Bluetooth connection closed")
-        except Exception as e:
-            print(f"{error_prefix}Error closing Bluetooth: {e}")
-        finally:
-            bt_socket = None
-            bt_connected = False
 
 """Disconnect from Bluetooth device"""
 def disconnect_bluetooth():
@@ -241,7 +237,7 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
             echo = bt_socket.recv(expect_echo)
             print(f"{info_prefix}Received echo: {bar_hex(echo)}")
         print(f"{info_prefix}Sent {len(packet)} bytes via Bluetooth SPP: {bt_mac.get()}")
-        messagebox.showinfo("Info", f"Message sent to ESP32 successfully via Bluetooth!")
+        messagebox.showinfo("Info", f"Message sent to {device_name} successfully via Bluetooth!")
         return echo
     except Exception as e:
         print(f"{error_prefix}Communication error: {e}")
@@ -250,8 +246,8 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
         return b""
 
 # ──────────────── USB Serial utilities ──────────────────────────────
+usb_socket = None
 port_var = tk.StringVar(value="")        # currently selected port
-mode_var = tk.IntVar(value=0)            # 0 = USB, 1 = Bluetooth
 
 """Return list of (device, description) tuples."""
 def available_ports():
@@ -271,8 +267,21 @@ def refresh_port_list(combo):
     else:
         port_var.set("")
 
+"""Disconnect from USB Port"""
+def disconnect_usb():
+    global usb_socket
+    if usb_socket:
+        try:
+            usb_socket.close()
+            print(f"{info_prefix}USB connection closed")
+        except Exception as e:
+            print(f"{error_prefix}Error closing USB Port: {e}")
+        finally:
+            usb_socket = None
+
 """Open selected COM port, transmit packet, optionally read echo."""
 def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
+    global usb_socket
     port = port_var.get()
     if " " in port:                 # ← NEW: take only first token ► "COM4"
         port = port.split()[0]      
@@ -280,14 +289,15 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
         print(f"{error_prefix}No serial port selected.")
         messagebox.showerror("Error", f"No USB serial port selected!") 
     try:
-        with serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT) as ser:
+        usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT)
+        with usb_socket as ser:
             n = ser.write(packet)
             print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
             if expect_echo:
                 echo = ser.read(expect_echo)
                 print(f"PC  echo  {bar_hex(echo)}")
                 return echo
-            messagebox.showinfo("Info", f"Message sent to ESP32 successfully via USB serial {port}!")
+            messagebox.showinfo("Info", f"Message sent to {device_name} successfully via USB serial {port}!")
     except serial.SerialException as e:
         print(f"{error_prefix}opening {port}: {e}")
         messagebox.showerror("Error", f"Error whilst opening port {port}!") 
@@ -295,15 +305,13 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
     print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
 
 # ──────────────── Packet helpers ────────────────────────────────────
-"""Enumate color into single letter for packet data"""
-def color_enum(c):
-    return {'Red':'R','Green':'G','Blue':'B','Infrared':'I'}.get(c,'N')
-
 """Build the payload data"""
 def build_payload() -> str:
     pieces=[]
-    for row in params:
-        pieces.extend(map(str,row))
+    for i in range(len(params)):
+        if params[i][0] == 'N':
+            return False
+        pieces.extend(map(str,params[i]))
     pieces.extend(["C", str(cycles.get())])
     return ",".join(pieces)
 
@@ -327,10 +335,69 @@ def bar_hex(pkt: bytes, chunk: int = 5) -> str:
     return ' | '.join(groups)
 
 # ──────────────── GUI data structures ───────────────────────────────
-rows, params = [], []
+rows, params = [], []   # rows = structure + values shown in the boxes, params = values stored in the program
 cycles = tk.IntVar(value=default_cycles)
 
-# ──────────────── GUI configuration file r/w ────────────────────────
+# ──────────────── GUI Setting file save/load ────────────────────────
+"""Save current settings to file"""
+def save_settings():
+    print_value()
+    settings = {
+        "rows": [],
+        "cycles": cycles.get()
+    }
+    for row in params:
+        settings["rows"].append({
+            "color": row[0],
+            "intensity": row[1],
+            "on_time": row[2],
+            "off_time": row[3]
+        })
+    # File I/O
+    try:
+        with open(SETTING_FILE, 'w') as f:
+            json.dump(settings, f, indent=4)
+        print(f"{info_prefix}Settings saved to {SETTING_FILE}")
+        messagebox.showinfo("Info", "Settings saved successfully!")
+    except Exception as e:
+        print(f"{error_prefix}Saving settings: {e}")
+        messagebox.showerror("Error", f"Failed to save settings: {e}")
+
+"""Load settings from file"""
+def load_settings():
+    if not os.path.exists(SETTING_FILE): return False
+    # File I/O
+    try:
+        with open(SETTING_FILE, 'r') as f:
+            settings = json.load(f)
+        
+        # Clear existing rows
+        while len(rows) > 0:
+            delete_row(0)
+            
+        # Load rows and cycles
+        for row in settings.get("rows", []):
+            add_new_row()
+            i = len(rows) - 1
+            rows[i]['vars']['color'].set(enum_color(row.get("color")))         # Update color button's color
+            rows[i]['widgets'][0].config(text=enum_color(row.get("color")))    # Update color button's text
+            rows[i]['vars']['intensity'].set(row.get("intensity", max_intensity))
+            rows[i]['vars']['on_time'].set(row.get("on_time", 1))
+            rows[i]['vars']['off_time'].set(row.get("off_time", 1))
+            update_params(i)
+            update_row_style(i)
+        cycles.set(settings.get("cycles", default_cycles))
+
+        print(f"{info_prefix}Settings loaded from {SETTING_FILE}")
+        messagebox.showinfo("Info", "Settings loaded successfully!")
+        print_value()
+        return True
+    except Exception as e:
+        print(f"{error_prefix}Loading settings: {e}")
+        messagebox.showerror("Error", f"Failed to load settings: {e}")
+        return False
+
+# ──────────────── GUI connection cfg file r/w ────────────────────────
 """Load configuration from file or return defaults"""
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -365,14 +432,14 @@ def save_config(mode, com_port, bt_mac):
         print(f"{error_prefix}Saving config: {e}")
         messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
 
-"""Sequence for saving the config values to the variables"""
+"""Sequence for loading the config values to the variables"""
 def config_setval():
     config = load_config()
     mode_var.set(config["mode"])
     port_var.set(config["com_port"])
     bt_mac.set(config["bt_mac"])
 
-# ──────────────── GUI configuration ──────────────────────────────
+# ──────────────── GUI connection cfg ──────────────────────────────
 """The code for the connection setting window"""
 def config_window():
     config_win = tk.Toplevel(root)
@@ -418,11 +485,11 @@ def config_window():
 
     # HELP FUNCTION: Shows instructions for finding ports/devices
     def show_help():
-        help_text = """
+        help_text = f"""
         How to find USB Serial Port / Bluetooth Host:
         
         USB Serial Port (COM Port):
-        1. Connect your ESP32 via USB
+        1. Connect your {device_name} via USB
         2. For Windows:
            - Open Device Manager
            - Expand 'Ports (COM & LPT)'
@@ -434,7 +501,7 @@ def config_window():
         4. Click the Refresh button to update the list
         
         Bluetooth Device:
-        1. Ensure the designated device is powered on and in pairing mode
+        1. Ensure the {device_name} is powered on and in pairing mode
         2. For Windows:
            - Open Bluetooth settings
            - Pair with the correct device
@@ -444,8 +511,8 @@ def config_window():
            - Pair with the correct device
            - Click the Refresh button to update the list
         4. If device doesn't appear:
-           - Ensure it's not connected to another device
-           - Restart the designated device
+           - Ensure it's not connected to another PC
+           - Re-pair the {device_name}
         """
         messagebox.showinfo("Connection Help", help_text)
 
@@ -457,14 +524,45 @@ def config_window():
     config_win.wait_window(config_win)
 
 # ──────────────── GUI callbacks ─────────────────────────────────────
+"""Printing out the values of rows and params"""
+def print_value():
+    print(f"====================")
+    for i in range(len(rows)):
+        print(f"{rows[i]['vars']['color'].get()}, {rows[i]['vars']['intensity'].get()}, {rows[i]['vars']['on_time'].get()}, {rows[i]['vars']['off_time'].get()}; ", end="")
+    print(f"\n{params} \n====================\n")
+    
+"""2 functions for enumating color into single letter or full letter"""
+def color_enum(c): # Long-form to short-form
+    return {'Red':'R','Green':'G','Blue':'B','Infrared':'I'}.get(c,'N')
+def enum_color(c): # Short-form to long-form
+    return {'R':'Red','G':'Green','B':'Blue','I':'Infrared'}.get(c,select_text)
+
+"""Validate spinbox input and clamp to min/max values"""
+def validate_spinbox(var, min_val, max_val):
+    current = var.get()
+    if current < min_val:
+        messagebox.showinfo("Info", f"Minimum value reached! ({min_val})") 
+        var.set(min_val)
+    elif current > max_val:
+        messagebox.showinfo("Info", f"Maximum value reached! ({max_val})") 
+        var.set(max_val)
+    return True
+
 """Synchronise params list when a widget variable changes."""
 def update_params(i, _=None):
     if i >= len(params): return
     values = rows[i]['vars']
+
+    # Validate and clamp values before updating params
+    validate_spinbox(values['intensity'], 1, max_intensity)
+    validate_spinbox(values['on_time'], 1, max_on_off_time)
+    validate_spinbox(values['off_time'], 1, max_on_off_time)
+
     params[i] = [color_enum(values['color'].get()),
                  int(values['intensity'].get()),
                  int(values['on_time'].get()),
                  int(values['off_time'].get())]
+    print_value()
 
 """Update the color of the sliders when the color selection changes"""
 def update_row_style(i):
@@ -478,58 +576,74 @@ def update_row_style(i):
 def add_new_row():
     if len(rows) >= max_row:
         print(f"{info_prefix}maximum rows reached")
-        messagebox.showerror("Error", f"Maximum row reached! ({max_row})") 
+        messagebox.showinfo("Info", f"Maximum row reached! ({max_row})") 
         return
     i = len(rows)
-    v = {'color':     ttk.StringVar(value=select_text),
-         'intensity': ttk.IntVar(value=255),
+    v = {'color':     ttk.StringVar(value=select_text),     # v = row's values in this function!
+         'intensity': ttk.IntVar(value=max_intensity),
          'on_time':   ttk.IntVar(value=1),
          'off_time':  ttk.IntVar(value=1)}
     
-    on_spin = ttk.Spinbox(table, textvariable=v['on_time'], from_=1, to=max_on_off_time, width=5, bootstyle="secondary")
-    off_spin = ttk.Spinbox(table, textvariable=v['off_time'], from_=1, to=max_on_off_time, width=5, bootstyle=off_time_color)
-
-    on_update  = lambda val: v['on_time'].set(int(float(val)))
-    off_update = lambda val: v['off_time'].set(int(float(val)))
-
     col_button = ttk.Menubutton(table, text=v['color'].get(), width=12, bootstyle="secondary")
-    menu = tk.Menu(col_button); col_button['menu'] = menu
+    menu = tk.Menu(col_button); 
+    col_button['menu'] = menu
     def choose(c):
-        v['color'].set(c); col_button.config(text=c); update_row_style(i)
+        v['color'].set(c); 
+        col_button.config(text=c); 
+        update_row_style(i)
     for c in colors:
         menu.add_command(label=c, command=lambda c=c: choose(c))
+
+    intensity_spin = ttk.Spinbox(
+        table, textvariable=v['intensity'], from_=1, to=max_intensity, 
+        width=3, bootstyle=intensity_color, command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
+    )
+    on_spin = ttk.Spinbox(
+        table, textvariable=v['on_time'], from_=1, to=max_on_off_time, 
+        width=5, bootstyle="secondary", command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
+    )
+    off_spin = ttk.Spinbox(
+        table, textvariable=v['off_time'], from_=1, to=max_on_off_time, 
+        width=5, bootstyle=off_time_color, command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
+    )
+    on_update  = lambda val: v['on_time'].set(int(float(val)))
+    off_update = lambda val: v['off_time'].set(int(float(val)))
 
     del_button = ttk.Button(table, text=delete_text, width=2, command=lambda idx=i: delete_row(idx), bootstyle="danger")
 
     # widgets
     w = [
         col_button,
-        ttk.Spinbox(table, textvariable=v['intensity'], from_=1, to=255, width=3, bootstyle=intensity_color),
+        intensity_spin,
         on_spin,
         off_spin,
         ttk.Scale(table, variable=v['on_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=on_update, bootstyle="secondary"),
         ttk.Scale(table, variable=v['off_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=off_update, bootstyle=off_time_color),
         del_button
     ]
-
     for col, widget in enumerate(w):
         widget.grid(row=i+1, column=col, padx=5, pady=5, sticky="nsew")
         table.grid_columnconfigure(col, weight=1)
 
-    rows.append({'widgets': w, 
-                 'vars': v})
-    params.append([v['color'].get(), 
+    traces = {}
+    for name in v:
+        traces[name] = v[name].trace_add("write", lambda *_, idx=i, n=name: update_params(idx, n))
+    color_trace = v['color'].trace_add("write", lambda *_, idx=i: update_row_style(idx))
+
+    rows.append({
+        'widgets': w, 
+        'vars': v,
+        'traces': traces,
+        'color_trace': color_trace
+    })
+    params.append([color_enum(v['color'].get()), 
                    int(v['intensity'].get()), 
                    int(v['on_time'].get()), 
                    int(v['off_time'].get())])
 
-    # variable traces
-    for name in v:
-        v[name].trace_add("write", lambda *_,idx=i, n=name: update_params(idx, n))
-
-    v['color'].trace_add("write", lambda *_: update_row_style(i))
     update_row_style(i)
     print(f"{info_prefix}added row {i}, current number of rows: {len(rows)}")
+    print_value()
 
 """Callback for the delete button on each row"""
 def delete_row(i):
@@ -537,37 +651,67 @@ def delete_row(i):
     for w in rows[i]['widgets']:
         w.destroy()
     del rows[i], params[i]
-    # re-grid rows below
+
+    # re-grid rows and update the variable traces below
     for idx in range(i, len(rows)):
         for col, widget in enumerate(rows[idx]['widgets']):
             widget.grid(row=idx+1, column=col)
+
+        for name in rows[idx]['traces']:
+            rows[idx]['vars'][name].trace_remove("write", rows[idx]['traces'][name])
+        rows[idx]['traces'] = {}
+        for name in rows[idx]['vars']:
+            rows[idx]['traces'][name] = rows[idx]['vars'][name].trace_add(
+                "write", lambda *_, idx=idx, n=name: update_params(idx, n))
+        
+        rows[idx]['vars']['color'].trace_remove("write", rows[idx]['color_trace'])
+        rows[idx]['color_trace'] = rows[idx]['vars']['color'].trace_add(
+            "write", lambda *_, idx=idx: update_row_style(idx))
+
     print(f"{info_prefix}deleted row {i}, current number of rows: {len(rows)}")
+    print_value()
 
 """Callback for the send to ESP32 button"""
 def send_action():
+    # Check cooldown first
+    global last_send_time
+    current_time = time.time()
+    if current_time - last_send_time < COOLDOWN:
+        remaining = int(COOLDOWN - (current_time - last_send_time))
+        messagebox.showinfo("Info", f"Please wait for {remaining} seconds before sending again.")
+        return
+    
     if len(rows) < 1:
         messagebox.showerror("Error", f"Cannot send with less than 1 row!")
         return
     payload = build_payload()
-    pkt     = build_packet(payload)
+    if not payload:
+        print(f"{error_prefix}No color selected in 1 or more row(s)")
+        messagebox.showerror("Error", f"No color selected in 1 or more row(s)!")
+        return
+    pkt = build_packet(payload)
     print(f"{info_prefix}PC payload: {payload}")
     print(f"{info_prefix}PC packet : {bar_hex(pkt)}")   # ← uses grouped view
+
+    last_send_time = current_time
+    send_btn.config(state="disabled")
+    root.after(1000, update_send_button)
     
     if mode_var.get() == 0:  # USB mode
         send_usb(pkt)
     else:  # Bluetooth mode
         send_bluetooth(pkt)
 
-"""Callback for the send test packet button"""
-def send_test_packet():
-    demo = "R,255,1,1,C,3"
-    pkt  = build_packet(demo)
-    print(f"{info_prefix}PC TEST packet : {bar_hex(pkt)}")  # ← grouped view
-
-    if mode_var.get() == 0:  # USB mode
-        send_usb(pkt)
-    else:  # Bluetooth mode
-        send_bluetooth(pkt)
+# Additional Function to update button status during cooldown
+def update_send_button():
+    global last_send_time
+    current_time = time.time()
+    remaining = int(COOLDOWN - (current_time - last_send_time))
+    if remaining > 0:
+        send_btn.config(text=f"Wait ({remaining}s)", state="disabled")
+        root.after(1000, update_send_button)
+    else:
+        send_btn.config(text=send_text, state="normal")
 
 """Update connection status indicators"""
 def update_status():
@@ -586,8 +730,7 @@ main   = ttk.Frame(root);
 main.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
 table  = ttk.Frame(main)
 footer = ttk.Frame(main, relief='ridge')
-status_frame = ttk.Frame(footer)
-status_frame.grid(row=0, column=5, padx=(30, 5), pady=5)
+status_frame = ttk.Frame(main)
 
 # table header
 for col, h in enumerate(headers):
@@ -596,13 +739,15 @@ for col, h in enumerate(headers):
 add_new_row()  # first empty row
 
 # footer buttons
-ttk.Button(footer, text="Add Row", width=15, bootstyle="danger", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
-ttk.Button(footer, text="Send to ESP32", width=15, bootstyle="success", command=send_action).grid(row=0, column=1, padx=5, pady=5)
-#ttk.Button(footer, text="Send TEST pkt", width=15, bootstyle="warning", command=send_test_packet).grid(row=0, column=2, padx=5, pady=5)
+ttk.Button(footer, text=add_row_text, width=15, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
+send_btn = ttk.Button(footer, text=send_text, width=15, bootstyle="success-outline", command=send_action)
+send_btn.grid(row=0, column=1, padx=5, pady=5)
 
 ttk.Label(footer, text="Cycles").grid(row=0, column=2, padx=(20, 5), pady=5)
 ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=3, padx=5, pady=5)
-ttk.Button(footer, text="Configure Connection", width=25, bootstyle="warning", command=config_window).grid(row=0, column=4, padx=5, pady=5)
+ttk.Button(footer, text="Configure Connection", width=15, bootstyle="warning-outline", command=config_window).grid(row=0, column=4, padx=5, pady=5)
+ttk.Button(footer, text="Save Settings", width=10, bootstyle="primary-outline", command=save_settings).grid(row=0, column=5, padx=5, pady=5)
+ttk.Button(footer, text="Load Settings", width=10, bootstyle="info-outline", command=load_settings).grid(row=0, column=6, padx=5, pady=5)
 
 # Connection type and port status
 mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
@@ -613,12 +758,14 @@ update_status()
 
 # ──────────────── GUI window ────────────────────────────────────────
 table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+status_frame.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
 footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
-root.after(50, config_window)
 
+root.after(50, config_window)
 def on_closing():
-    print(f"{info_prefix}Closing app.")
+    print(f"{info_prefix}Closing app")
     disconnect_bluetooth()
+    disconnect_usb()
     root.destroy()
 
 root.protocol("WM_DELETE_WINDOW", on_closing)

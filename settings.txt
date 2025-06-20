@@ -1,1 +1,53 @@
-e
+{
+    "rows": [
+        {
+            "color": "I",
+            "intensity": 192,
+            "on_time": 47,
+            "off_time": 53
+        },
+        {
+            "color": "G",
+            "intensity": 221,
+            "on_time": 60,
+            "off_time": 49
+        },
+        {
+            "color": "B",
+            "intensity": 214,
+            "on_time": 19,
+            "off_time": 71
+        },
+        {
+            "color": "R",
+            "intensity": 255,
+            "on_time": 1,
+            "off_time": 1
+        },
+        {
+            "color": "B",
+            "intensity": 170,
+            "on_time": 100,
+            "off_time": 47
+        },
+        {
+            "color": "G",
+            "intensity": 233,
+            "on_time": 17,
+            "off_time": 34
+        },
+        {
+            "color": "I",
+            "intensity": 124,
+            "on_time": 43,
+            "off_time": 100
+        },
+        {
+            "color": "B",
+            "intensity": 220,
+            "on_time": 25,
+            "off_time": 46
+        }
+    ],
+    "cycles": 22
+}
