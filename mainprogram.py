@@ -27,28 +27,30 @@ SETTING_FILE        = "settings.txt"
 TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
 HEADER1, HEADER2    = 0x5A, 0xA5
-READ_TIMEOUT        = 0.3               # seconds for optional loop-back read
+READ_TIMEOUT_USB    = 0.3               # seconds for optional loop-back read
+READ_TIMEOUT_BT     = 0.3
 COOLDOWN            = 10
 
 device_name         = "ESP32"
 last_send_time      = 0                 # Track when last send occurred
 intensity_color     = 'dark'
 off_time_color      = 'secondary'
-row_num_text        = "Colors: "
-select_text         = "Select Color"
+row_num_text        = "Sequences: "
+select_text         = "<Please Select>"
 delete_text         = "X"
 refresh_text        = "↻"
-add_row_text        = "Add Color Row"
+add_row_text        = "Add Colour Row"
 send_text           = f"Send to {device_name}"
 info_prefix         = "*INFO: "
 error_prefix        = "*ERROR: "
+attention_prefix    = "ATTENTION: "     # info prefix but shown in GUI instead of console
 default_cycles      = 5
 
 max_intensity       = 255
 max_on_off_time     = 100
 max_row             = 250               # max no. of table rows
 
-headers = ['Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
+headers = ['Colour', 'Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
 colors  = ["Red","Green","Blue","Infrared"]
 colors_mapper = {
     "Red":"danger",
@@ -57,6 +59,10 @@ colors_mapper = {
     "Infrared":"warning", 
     select_text:"secondary"
 }
+def color_enum(c): # Long-form to short-form
+    return {'Red':'R','Green':'G','Blue':'B','Infrared':'I'}.get(c,'N')
+def enum_color(c): # Short-form to long-form
+    return {'R':'Red','G':'Green','B':'Blue','I':'Infrared'}.get(c,select_text)
 
 # ──────────────── Tk root window ─────────────────────────────────────
 root = tk.Tk()
@@ -105,7 +111,7 @@ def connect_bluetooth():
                 bytesize=serial.EIGHTBITS,
                 parity=serial.PARITY_NONE,
                 stopbits=serial.STOPBITS_ONE,
-                timeout=READ_TIMEOUT,
+                timeout=READ_TIMEOUT_BT,
                 rtscts=False,
                 dsrdtr=False
             )
@@ -122,7 +128,7 @@ def connect_bluetooth():
         print(f"{info_prefix}Connecting to {bt_addr}")
         bt_socket = bluetooth.BluetoothSocket(bluetooth.RFCOMM)
         bt_socket.connect((bt_addr, TARGET_PORT))
-        bt_socket.settimeout(READ_TIMEOUT)
+        bt_socket.settimeout(READ_TIMEOUT_BT)
         bt_connected = True
         print(f"{info_prefix}Bluetooth connected to {bt_addr}")
         return True
@@ -201,9 +207,6 @@ def refresh_bt_list(combo):
         print(f"{error_prefix}Bluetooth scanning failed: {e}")
         messagebox.showerror("Error", f"Bluetooth scanning failed: {e}") 
         root.after(0, lambda: combo.set("Scan failed, try again"))
-    
-    # Run scan in separate thread to prevent UI freeze
-    # threading.Thread(target=scan_thread, daemon=True).start()
 
 """Update Bluetooth combo box with scan results"""
 def update_bt_list(combo, device_list):
@@ -238,7 +241,7 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
             echo = bt_socket.recv(expect_echo)
             print(f"{info_prefix}Received echo: {bar_hex(echo)}")
         print(f"{info_prefix}Sent {len(packet)} bytes via Bluetooth SPP: {bt_mac.get()}")
-        info_status(msg=f"Message sent to {device_name} successfully via Bluetooth!")
+        info_status(msg=f"Message sent to {device_name} successfully via Bluetooth!", fg='green')
         return echo
     except Exception as e:
         print(f"{error_prefix}Communication error: {e}")
@@ -290,7 +293,7 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
         print(f"{error_prefix}No serial port selected.")
         messagebox.showerror("Error", f"No USB serial port selected!") 
     try:
-        usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT)
+        usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT_USB)
         with usb_socket as ser:
             n = ser.write(packet)
             print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
@@ -298,7 +301,7 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
                 echo = ser.read(expect_echo)
                 print(f"PC  echo  {bar_hex(echo)}")
                 return echo
-            info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!")
+            info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!", fg='green')
     except serial.SerialException as e:
         print(f"{error_prefix}opening {port}: {e}")
         messagebox.showerror("Error", f"Error whilst opening port {port}!") 
@@ -324,7 +327,6 @@ def build_packet(payload: str) -> bytes:
     chk    = (sum(sync + length + data) & 0xFFFF).to_bytes(2, 'little')
     return sync + length + data + chk
 
-# ──────────────── NEW: prettier hex printer ──────────────────────────
 """
 Convert bytes to grouped hex string, e.g.
 b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'
@@ -339,7 +341,7 @@ def bar_hex(pkt: bytes, chunk: int = 5) -> str:
 rows, params = [], []   # rows = structure + values shown in the boxes, params = values stored in the program
 cycles = tk.IntVar(value=default_cycles)
 
-# ──────────────── GUI Setting file save/load ────────────────────────
+# ──────────────── GUI File I/O ──────────────────────────────────────
 """Save current settings to file"""
 def save_settings():
     debug_print_value()
@@ -359,14 +361,16 @@ def save_settings():
         with open(SETTING_FILE, 'w') as f:
             json.dump(settings, f, indent=4)
         print(f"{info_prefix}Settings saved to {SETTING_FILE}")
-        info_status(msg=f"Settings saved to {SETTING_FILE} successfully!")
+        info_status(msg=f"Settings saved to {SETTING_FILE} successfully!", fg='blue')
     except Exception as e:
         print(f"{error_prefix}Saving settings: {e}")
-        messagebox.showerror("Error", f"Failed to save settings: {e}")
+        messagebox.showerror("Error", f"Failed to save to {SETTING_FILE}: {e}")
 
 """Load settings from file"""
 def load_settings():
-    if not os.path.exists(SETTING_FILE): return False
+    if not os.path.exists(SETTING_FILE): 
+        info_status(msg=f"{attention_prefix}{SETTING_FILE} not found. Save settings first to create such file!", fg='red')
+        return False
     # File I/O
     try:
         with open(SETTING_FILE, 'r') as f:
@@ -386,24 +390,32 @@ def load_settings():
             update_row_style(i)
         cycles.set(settings.get("cycles", default_cycles))
 
-        print(f"{info_prefix}Settings loaded from {SETTING_FILE}")
-        info_status(msg=f"Settings loaded from {SETTING_FILE} successfully!")
+        info_status(msg=f"Settings loaded from {SETTING_FILE} successfully!", fg='blue')
         debug_print_value()
         return True
     except Exception as e:
         print(f"{error_prefix}Loading settings: {e}")
-        messagebox.showerror("Error", f"Failed to load settings: {e}")
+        messagebox.showerror("Error", f"Failed to load from {SETTING_FILE}: {e}")
         return False
 
-# ──────────────── GUI connection cfg file r/w ────────────────────────
+"""Save configuration to file"""
+def save_config(mode, com_port, bt_mac):
+    try:
+        with open(CONFIG_FILE, 'w') as f:
+            f.write(f"mode={mode}\n")
+            f.write(f"com_port={com_port}\n")
+            f.write(f"bt_mac={bt_mac}\n")
+        info_status(msg=f"Connection settings saved, now using {"USB" if mode == 0 else "Bluetooth"}.", fg='grey')
+    except Exception as e:
+        print(f"{error_prefix}Saving config: {e}")
+        messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
+
 """Load configuration from file or return defaults"""
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         return {"mode": 0, "com_port": "", "bt_mac": ""}
-    
     config = {"mode": 0, "com_port": "", "bt_mac": ""}
     try:
-        print(f"{info_prefix}Configuration loading")
         with open(CONFIG_FILE, 'r') as f:
             for line in f:
                 key, value = line.strip().split('=', 1)
@@ -413,29 +425,14 @@ def load_config():
                     config["com_port"] = value
                 elif key == "bt_mac":
                     config["bt_mac"] = value
+                # Sequence for setting the config values into the variables
+                mode_var.set(config["mode"])
+                port_var.set(config["com_port"])
+                bt_mac.set(config["bt_mac"])
     except Exception as e:
         print(f"{error_prefix}Loading config: {e}")
         messagebox.showerror("Error", f"Error whilst loading {CONFIG_FILE}: {e}!") 
     return config
-
-"""Save configuration to file"""
-def save_config(mode, com_port, bt_mac):
-    try:
-        with open(CONFIG_FILE, 'w') as f:
-            f.write(f"mode={mode}\n")
-            f.write(f"com_port={com_port}\n")
-            f.write(f"bt_mac={bt_mac}\n")
-        print(f"{info_prefix}Configuration saved, now using mode {mode}")
-    except Exception as e:
-        print(f"{error_prefix}Saving config: {e}")
-        messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
-
-"""Sequence for loading the config values to the variables"""
-def config_setval():
-    config = load_config()
-    mode_var.set(config["mode"])
-    port_var.set(config["com_port"])
-    bt_mac.set(config["bt_mac"])
 
 # ──────────────── GUI connection cfg ──────────────────────────────
 """The code for the connection setting window"""
@@ -444,8 +441,7 @@ def config_window():
     config_win.title("IC-Project  ·  Connection Settings")
     config_win.resizable(False, False)
     config_win.grab_set()
-    config_setval()
-    info_status(msg=f"Connection Setting is opened.")
+    load_config()
     
     # Mode selection
     mode_frame = ttk.Frame(config_win)
@@ -476,6 +472,10 @@ def config_window():
     # Buttons
     btn_frame = ttk.Frame(config_win)
     btn_frame.pack(fill='x', pady=20)
+
+    def on_cancel():
+        info_status(msg=f"Ready to send to {device_name}.", fg='grey')
+        config_win.destroy()
 
     def on_save():
         save_config(mode_var.get(), port_var.get(), bt_mac.get())
@@ -517,11 +517,11 @@ def config_window():
 
     # Add Help button to button frame
     ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info", width=5).pack(side='left', padx=20)
-    ttk.Button(btn_frame, text="Cancel", command=config_win.destroy, bootstyle="secondary", width=8).pack(side='right', padx=20)
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary", width=8).pack(side='right', padx=20)
     ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success", width=8).pack(side='right')
 
     config_win.wait_window(config_win)
-    info_status(msg=f"Ready to send to {device_name}.")
+    
 
 # ──────────────── GUI callbacks ─────────────────────────────────────
 """Printing out the values of rows and params"""
@@ -531,20 +531,14 @@ def debug_print_value():
         print(f"{rows[i]['vars']['color'].get()}, {rows[i]['vars']['intensity'].get()}, {rows[i]['vars']['on_time'].get()}, {rows[i]['vars']['off_time'].get()}; ", end="")
     print(f"\n{params} \n====================\n")
     
-"""TWO functions for enumating color into single letter or full letter"""
-def color_enum(c): # Long-form to short-form
-    return {'Red':'R','Green':'G','Blue':'B','Infrared':'I'}.get(c,'N')
-def enum_color(c): # Short-form to long-form
-    return {'R':'Red','G':'Green','B':'Blue','I':'Infrared'}.get(c,select_text)
-
 """Validate spinbox input and clamp to min/max values"""
 def validate_spinbox(var, min_val, max_val):
     current = var.get()
     if current < min_val:
-        messagebox.showinfo("Info", f"Minimum value reached! ({min_val})") 
+        info_status(msg=f"{attention_prefix}Minimum value reached! ({min_val})", fg='red')
         var.set(min_val)
     elif current > max_val:
-        messagebox.showinfo("Info", f"Maximum value reached! ({max_val})") 
+        info_status(msg=f"{attention_prefix}Maximum value reached! ({max_val})", fg='red')
         var.set(max_val)
     return True
 
@@ -576,7 +570,7 @@ def update_row_style(i):
 def add_new_row():
     if len(rows) >= max_row:
         print(f"{info_prefix}maximum rows reached")
-        messagebox.showinfo("Info", f"Maximum row reached! ({max_row})") 
+        info_status(msg=f"{attention_prefix}Maximum row reached! ({max_row})", fg='red')
         return
     i = len(rows)
     v = {'color':     ttk.StringVar(value=select_text),     # v = row's values in this function!
@@ -643,7 +637,7 @@ def add_new_row():
     update_row_style(i)
 
     row_count_var.set(f"{row_num_text}{len(rows)}")
-    info_status(msg=f"Added row {i+1} successfully!")
+    info_status(msg=f"Added colour row {i+1} successfully!", fg='grey')
     print(f"{info_prefix}added row {i+1}, current number of rows: {len(rows)}")
     debug_print_value()
 
@@ -671,7 +665,7 @@ def delete_row(i):
             "write", lambda *_, idx=idx: update_row_style(idx))
 
     row_count_var.set(f"{row_num_text}{len(rows)}")
-    info_status(msg=f"Deleted row {i+1} successfully!")
+    info_status(msg=f"Deleted colour row {i+1} successfully!", fg='grey')
     print(f"{info_prefix}deleted row {i+1}, current number of rows: {len(rows)}")
     debug_print_value()
 
@@ -682,15 +676,14 @@ def send_action():
     current_time = time.time()
     if current_time - last_send_time < COOLDOWN:
         remaining = int(COOLDOWN - (current_time - last_send_time))
-        messagebox.showinfo("Info", f"Please wait for {remaining} seconds before sending again.")
+        info_status(msg=f"{attention_prefix}Please wait for {remaining} seconds before sending again.", fg='red')
         return
     if len(rows) < 1:
-        messagebox.showerror("Error", f"Cannot send with less than 1 row!")
+        info_status(msg=f"{attention_prefix}Please add at least 1 colour row!", fg='red')
         return
     payload = build_payload()
     if not payload:
-        print(f"{error_prefix}No color selected in 1 or more row(s)")
-        messagebox.showerror("Error", f"No color selected in 1 or more row(s)!")
+        info_status(msg=f"{attention_prefix}Please select a colour on 1 or more colour row(s)!", fg='red')
         return
     pkt = build_packet(payload)
     print(f"{info_prefix}PC payload: {payload}")
@@ -701,11 +694,11 @@ def send_action():
     root.after(1000, update_send_button)
     
     if mode_var.get() == 0:  # USB mode
-        info_status(msg=f"Attempting to send via USB serial.")
+        info_status(msg=f"Attempting to send via USB serial.", fg='grey')
         disconnect_bluetooth()
         send_usb(pkt)
     else:  # Bluetooth mode
-        info_status(msg=f"Attempting to send via Bluetooth.")
+        info_status(msg=f"Attempting to send via Bluetooth.", fg='grey')
         disconnect_usb()
         send_bluetooth(pkt)
 
@@ -722,7 +715,6 @@ def update_send_button():
 
 """Update connection status indicators"""
 def update_status():
-    config_setval()
     mode_text = "USB" if mode_var.get() == 0 else "Bluetooth"
     mode_color = "info" if mode_var.get() == 0 else "primary"
     mode_indicator.config(text=mode_text, bootstyle=mode_color)
@@ -733,8 +725,8 @@ def update_status():
     port_indicator.config(text=f"{port_indicator_text} {port if mode_var.get() == 0 else host}")
 
 """Update the status indicator text"""
-def info_status(msg="Unknown."):
-    status_indicator.config(text=msg)
+def info_status(msg="Unknown.", fg='grey'):
+    status_indicator.config(text=msg, foreground=fg)
 
 # ──────────────── GUI layout ────────────────────────────────────────
 main   = ttk.Frame(root); 
@@ -744,10 +736,8 @@ footer = ttk.Frame(main, relief='ridge')
 status_frame = ttk.Frame(main)
 
 # table header
-color_label = ttk.Label(table, text="Colours").grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
-table.grid_columnconfigure(0, weight=1)
 for col, h in enumerate(headers):
-    ttk.Label(table, text=h).grid(row=0, column=col+1, padx=5, pady=5, sticky="nsew")
+    ttk.Label(table, text=h).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
     table.grid_columnconfigure(col, weight=1)
 
 # footer buttons
@@ -769,10 +759,11 @@ mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
 mode_indicator.pack(side="left", padx=(0, 10))
 port_indicator = ttk.Label(status_frame, text="Unknown")
 port_indicator.pack(side="left")
-status_indicator = ttk.Label(status_frame, text="Unknown")
+status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
 status_indicator.pack(side="right")
 
 add_new_row()  # first empty row
+load_config()
 update_status()
 
 # ──────────────── GUI window ────────────────────────────────────────

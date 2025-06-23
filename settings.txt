@@ -2,7 +2,7 @@
     "rows": [
         {
             "color": "I",
-            "intensity": 192,
+            "intensity": 255,
             "on_time": 47,
             "off_time": 53
         },
@@ -38,7 +38,7 @@
         },
         {
             "color": "I",
-            "intensity": 124,
+            "intensity": 255,
             "on_time": 43,
             "off_time": 100
         },
@@ -47,6 +47,12 @@
             "intensity": 220,
             "on_time": 25,
             "off_time": 46
+        },
+        {
+            "color": "I",
+            "intensity": 255,
+            "on_time": 1,
+            "off_time": 1
         }
     ],
     "cycles": 22
