@@ -4,8 +4,7 @@ IC-Project : Mini-Flasher GUI - build 0618
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
-1. Use status bar to replace pop ups for info
-2. Function to send requesting packet data to the ESP32 and reflect the settings.
+1. Function to send requesting packet data to the ESP32 and reflect the settings.
 """
 
 import tkinter as tk
@@ -35,11 +34,12 @@ device_name         = "ESP32"
 last_send_time      = 0                 # Track when last send occurred
 intensity_color     = 'dark'
 off_time_color      = 'secondary'
+row_num_text        = "Colors: "
 select_text         = "Select Color"
 delete_text         = "X"
 refresh_text        = "↻"
 add_row_text        = "Add Color Row"
-send_text           = "Send & Save"
+send_text           = f"Send to {device_name}"
 info_prefix         = "*INFO: "
 error_prefix        = "*ERROR: "
 default_cycles      = 5
@@ -48,7 +48,7 @@ max_intensity       = 255
 max_on_off_time     = 100
 max_row             = 250               # max no. of table rows
 
-headers = ['Colors','Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
+headers = ['Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
 colors  = ["Red","Green","Blue","Infrared"]
 colors_mapper = {
     "Red":"danger",
@@ -61,6 +61,7 @@ colors_mapper = {
 # ──────────────── Tk root window ─────────────────────────────────────
 root = tk.Tk()
 root.title("IC-Project  ·  Mini-Flasher GUI")
+row_count_var = tk.StringVar(value=f"{row_num_text}?")
 
 # ──────────────── Bluetooth SPP utilities ────────────────────────────
 bt_socket = None
@@ -237,7 +238,7 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
             echo = bt_socket.recv(expect_echo)
             print(f"{info_prefix}Received echo: {bar_hex(echo)}")
         print(f"{info_prefix}Sent {len(packet)} bytes via Bluetooth SPP: {bt_mac.get()}")
-        messagebox.showinfo("Info", f"Message sent to {device_name} successfully via Bluetooth!")
+        info_status(msg=f"Message sent to {device_name} successfully via Bluetooth!")
         return echo
     except Exception as e:
         print(f"{error_prefix}Communication error: {e}")
@@ -297,7 +298,7 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
                 echo = ser.read(expect_echo)
                 print(f"PC  echo  {bar_hex(echo)}")
                 return echo
-            messagebox.showinfo("Info", f"Message sent to {device_name} successfully via USB serial {port}!")
+            info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!")
     except serial.SerialException as e:
         print(f"{error_prefix}opening {port}: {e}")
         messagebox.showerror("Error", f"Error whilst opening port {port}!") 
@@ -341,7 +342,7 @@ cycles = tk.IntVar(value=default_cycles)
 # ──────────────── GUI Setting file save/load ────────────────────────
 """Save current settings to file"""
 def save_settings():
-    print_value()
+    debug_print_value()
     settings = {
         "rows": [],
         "cycles": cycles.get()
@@ -358,7 +359,7 @@ def save_settings():
         with open(SETTING_FILE, 'w') as f:
             json.dump(settings, f, indent=4)
         print(f"{info_prefix}Settings saved to {SETTING_FILE}")
-        messagebox.showinfo("Info", "Settings saved successfully!")
+        info_status(msg=f"Settings saved to {SETTING_FILE} successfully!")
     except Exception as e:
         print(f"{error_prefix}Saving settings: {e}")
         messagebox.showerror("Error", f"Failed to save settings: {e}")
@@ -370,12 +371,9 @@ def load_settings():
     try:
         with open(SETTING_FILE, 'r') as f:
             settings = json.load(f)
-        
-        # Clear existing rows
+        # Clear existing rows then load new rows
         while len(rows) > 0:
-            delete_row(0)
-            
-        # Load rows and cycles
+            delete_row(0)   
         for row in settings.get("rows", []):
             add_new_row()
             i = len(rows) - 1
@@ -389,8 +387,8 @@ def load_settings():
         cycles.set(settings.get("cycles", default_cycles))
 
         print(f"{info_prefix}Settings loaded from {SETTING_FILE}")
-        messagebox.showinfo("Info", "Settings loaded successfully!")
-        print_value()
+        info_status(msg=f"Settings loaded from {SETTING_FILE} successfully!")
+        debug_print_value()
         return True
     except Exception as e:
         print(f"{error_prefix}Loading settings: {e}")
@@ -447,6 +445,7 @@ def config_window():
     config_win.resizable(False, False)
     config_win.grab_set()
     config_setval()
+    info_status(msg=f"Connection Setting is opened.")
     
     # Mode selection
     mode_frame = ttk.Frame(config_win)
@@ -522,16 +521,17 @@ def config_window():
     ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success", width=8).pack(side='right')
 
     config_win.wait_window(config_win)
+    info_status(msg=f"Ready to send to {device_name}.")
 
 # ──────────────── GUI callbacks ─────────────────────────────────────
 """Printing out the values of rows and params"""
-def print_value():
+def debug_print_value():
     print(f"====================")
     for i in range(len(rows)):
         print(f"{rows[i]['vars']['color'].get()}, {rows[i]['vars']['intensity'].get()}, {rows[i]['vars']['on_time'].get()}, {rows[i]['vars']['off_time'].get()}; ", end="")
     print(f"\n{params} \n====================\n")
     
-"""2 functions for enumating color into single letter or full letter"""
+"""TWO functions for enumating color into single letter or full letter"""
 def color_enum(c): # Long-form to short-form
     return {'Red':'R','Green':'G','Blue':'B','Infrared':'I'}.get(c,'N')
 def enum_color(c): # Short-form to long-form
@@ -562,7 +562,7 @@ def update_params(i, _=None):
                  int(values['intensity'].get()),
                  int(values['on_time'].get()),
                  int(values['off_time'].get())]
-    print_value()
+    debug_print_value()
 
 """Update the color of the sliders when the color selection changes"""
 def update_row_style(i):
@@ -596,15 +596,15 @@ def add_new_row():
 
     intensity_spin = ttk.Spinbox(
         table, textvariable=v['intensity'], from_=1, to=max_intensity, 
-        width=3, bootstyle=intensity_color, command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
+        width=2, bootstyle=intensity_color, command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
     )
     on_spin = ttk.Spinbox(
         table, textvariable=v['on_time'], from_=1, to=max_on_off_time, 
-        width=5, bootstyle="secondary", command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
+        width=2, bootstyle="secondary", command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
     )
     off_spin = ttk.Spinbox(
         table, textvariable=v['off_time'], from_=1, to=max_on_off_time, 
-        width=5, bootstyle=off_time_color, command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
+        width=2, bootstyle=off_time_color, command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
     )
     on_update  = lambda val: v['on_time'].set(int(float(val)))
     off_update = lambda val: v['off_time'].set(int(float(val)))
@@ -640,10 +640,12 @@ def add_new_row():
                    int(v['intensity'].get()), 
                    int(v['on_time'].get()), 
                    int(v['off_time'].get())])
-
     update_row_style(i)
-    print(f"{info_prefix}added row {i}, current number of rows: {len(rows)}")
-    print_value()
+
+    row_count_var.set(f"{row_num_text}{len(rows)}")
+    info_status(msg=f"Added row {i+1} successfully!")
+    print(f"{info_prefix}added row {i+1}, current number of rows: {len(rows)}")
+    debug_print_value()
 
 """Callback for the delete button on each row"""
 def delete_row(i):
@@ -668,8 +670,10 @@ def delete_row(i):
         rows[idx]['color_trace'] = rows[idx]['vars']['color'].trace_add(
             "write", lambda *_, idx=idx: update_row_style(idx))
 
-    print(f"{info_prefix}deleted row {i}, current number of rows: {len(rows)}")
-    print_value()
+    row_count_var.set(f"{row_num_text}{len(rows)}")
+    info_status(msg=f"Deleted row {i+1} successfully!")
+    print(f"{info_prefix}deleted row {i+1}, current number of rows: {len(rows)}")
+    debug_print_value()
 
 """Callback for the send to ESP32 button"""
 def send_action():
@@ -680,7 +684,6 @@ def send_action():
         remaining = int(COOLDOWN - (current_time - last_send_time))
         messagebox.showinfo("Info", f"Please wait for {remaining} seconds before sending again.")
         return
-    
     if len(rows) < 1:
         messagebox.showerror("Error", f"Cannot send with less than 1 row!")
         return
@@ -698,8 +701,12 @@ def send_action():
     root.after(1000, update_send_button)
     
     if mode_var.get() == 0:  # USB mode
+        info_status(msg=f"Attempting to send via USB serial.")
+        disconnect_bluetooth()
         send_usb(pkt)
     else:  # Bluetooth mode
+        info_status(msg=f"Attempting to send via Bluetooth.")
+        disconnect_usb()
         send_bluetooth(pkt)
 
 # Additional Function to update button status during cooldown
@@ -725,6 +732,10 @@ def update_status():
     host = bt_mac.get()
     port_indicator.config(text=f"{port_indicator_text} {port if mode_var.get() == 0 else host}")
 
+"""Update the status indicator text"""
+def info_status(msg="Unknown."):
+    status_indicator.config(text=msg)
+
 # ──────────────── GUI layout ────────────────────────────────────────
 main   = ttk.Frame(root); 
 main.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
@@ -733,27 +744,35 @@ footer = ttk.Frame(main, relief='ridge')
 status_frame = ttk.Frame(main)
 
 # table header
+color_label = ttk.Label(table, text="Colours").grid(row=0, column=0, padx=5, pady=5, sticky="nsew")
+table.grid_columnconfigure(0, weight=1)
 for col, h in enumerate(headers):
-    ttk.Label(table, text=h).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
+    ttk.Label(table, text=h).grid(row=0, column=col+1, padx=5, pady=5, sticky="nsew")
     table.grid_columnconfigure(col, weight=1)
-add_new_row()  # first empty row
 
 # footer buttons
 ttk.Button(footer, text=add_row_text, width=15, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
 send_btn = ttk.Button(footer, text=send_text, width=15, bootstyle="success-outline", command=send_action)
 send_btn.grid(row=0, column=1, padx=5, pady=5)
 
-ttk.Label(footer, text="Cycles").grid(row=0, column=2, padx=(20, 5), pady=5)
-ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=3, padx=5, pady=5)
-ttk.Button(footer, text="Configure Connection", width=15, bootstyle="warning-outline", command=config_window).grid(row=0, column=4, padx=5, pady=5)
-ttk.Button(footer, text="Save Settings", width=10, bootstyle="primary-outline", command=save_settings).grid(row=0, column=5, padx=5, pady=5)
-ttk.Button(footer, text="Load Settings", width=10, bootstyle="info-outline", command=load_settings).grid(row=0, column=6, padx=5, pady=5)
+row_counter = ttk.Label(footer, textvariable=row_count_var)
+row_counter.grid(row=0, column=2, padx=10, pady=5)
+
+ttk.Label(footer, text="Cycles").grid(row=0, column=3, padx=(20, 5), pady=5)
+ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=4, padx=5, pady=5)
+ttk.Button(footer, text="Configure Connection", width=18, bootstyle="warning-outline", command=config_window).grid(row=0, column=5, padx=5, pady=5)
+ttk.Button(footer, text="Save Settings", width=12, bootstyle="primary-outline", command=save_settings).grid(row=0, column=6, padx=5, pady=5)
+ttk.Button(footer, text="Load Settings", width=12, bootstyle="info-outline", command=load_settings).grid(row=0, column=7, padx=5, pady=5)
 
 # Connection type and port status
 mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
 mode_indicator.pack(side="left", padx=(0, 10))
 port_indicator = ttk.Label(status_frame, text="Unknown")
 port_indicator.pack(side="left")
+status_indicator = ttk.Label(status_frame, text="Unknown")
+status_indicator.pack(side="right")
+
+add_new_row()  # first empty row
 update_status()
 
 # ──────────────── GUI window ────────────────────────────────────────
