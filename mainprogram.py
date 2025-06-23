@@ -138,19 +138,6 @@ def connect_bluetooth():
         bt_connected = False
         return False
 
-"""Disconnect from Bluetooth device"""
-def disconnect_bluetooth():
-    global bt_socket, bt_connected
-    if bt_socket:
-        try:
-            bt_socket.close()
-            print(f"{info_prefix}Bluetooth connection closed")
-        except Exception as e:
-            print(f"{error_prefix}Error closing Bluetooth: {e}")
-        finally:
-            bt_socket = None
-            bt_connected = False
-
 """Re-scan bluetooth device and repopulate combobox."""
 def refresh_bt_list(combo):
     print(f"{info_prefix}Scanning for Bluetooth devices...")
@@ -219,6 +206,20 @@ def update_bt_list(combo, device_list):
     combo["values"] = device_list
     combo.set(device_list[0])
 
+"""Disconnect from Bluetooth device"""
+def disconnect_bluetooth():
+    global bt_socket, bt_connected
+    if bt_socket:
+        try:
+            bt_socket.close()
+            time.sleep(1)   # A buffer for connection closing
+            print(f"{info_prefix}Bluetooth connection closed")
+        except Exception as e:
+            print(f"{error_prefix}Error closing Bluetooth: {e}")
+        finally:
+            bt_socket = None
+            bt_connected = False
+
 """Send data over Bluetooth connection"""
 def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
     global bt_connected
@@ -277,6 +278,7 @@ def disconnect_usb():
     if usb_socket:
         try:
             usb_socket.close()
+            time.sleep(1)   # A buffer for connection closing
             print(f"{info_prefix}USB connection closed")
         except Exception as e:
             print(f"{error_prefix}Error closing USB Port: {e}")
@@ -405,7 +407,7 @@ def save_config(mode, com_port, bt_mac):
             f.write(f"mode={mode}\n")
             f.write(f"com_port={com_port}\n")
             f.write(f"bt_mac={bt_mac}\n")
-        info_status(msg=f"Connection settings saved, now using {"USB" if mode == 0 else "Bluetooth"}.", fg='grey')
+        info_status(msg=f"Connection settings saved, now using {'USB' if mode == 0 else 'Bluetooth'}.", fg='grey')
     except Exception as e:
         print(f"{error_prefix}Saving config: {e}")
         messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
