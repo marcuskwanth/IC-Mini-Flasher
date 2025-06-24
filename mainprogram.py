@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 0623
+IC-Project : Mini-Flasher GUI - build 0624
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -781,7 +781,7 @@ row_counter.grid(row=0, column=3, padx=10, pady=5)
 
 ttk.Label(footer, text="Cycles").grid(row=0, column=4, padx=(20, 5), pady=5)
 ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=5, padx=5, pady=5)
-ttk.Button(footer, text="Connection", width=12, bootstyle="warning-outline", command=config_window).grid(row=0, column=6, padx=5, pady=5)
+ttk.Button(footer, text="Configuration", width=12, bootstyle="warning-outline", command=config_window).grid(row=0, column=6, padx=5, pady=5)
 ttk.Button(footer, text="Save Settings", width=12, bootstyle="primary-outline", command=save_settings).grid(row=0, column=7, padx=5, pady=5)
 ttk.Button(footer, text="Load Settings", width=12, bootstyle="info-outline", command=load_settings).grid(row=0, column=8, padx=5, pady=5)
 

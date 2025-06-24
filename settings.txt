@@ -49,11 +49,11 @@
             "off_time": 46
         },
         {
-            "color": "I",
+            "color": "G",
             "intensity": 255,
-            "on_time": 1,
-            "off_time": 1
+            "on_time": 100,
+            "off_time": 66
         }
     ],
-    "cycles": 22
+    "cycles": 47
 }
