@@ -24,6 +24,8 @@ For macOS user, pls make sure to pip install python-lightblue
 # ──────────────── Global configuration ───────────────────────────────
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
+REQUEST_PKT         = "need_data"
+ECHO_PKT            = "data_here"
 TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
 HEADER1, HEADER2    = 0x5A, 0xA5
@@ -40,7 +42,7 @@ select_text         = "<Please Select>"
 delete_text         = "X"
 refresh_text        = "↻"
 add_row_text        = "Add Colour Row"
-send_text           = f"Send to {device_name}"
+send_text           = "Send Data"
 info_prefix         = "*INFO: "
 error_prefix        = "*ERROR: "
 attention_prefix    = "ATTENTION: "     # info prefix but shown in GUI instead of console
@@ -310,6 +312,25 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
 
     print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
 
+"""Function to request configuration data from ESP32 device"""
+def request_data():
+    if mode_var.get() != 0:
+        info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
+        return
+    build_packet(REQUEST_PKT)
+    pkt = build_packet(REQUEST_PKT)
+    
+    info_status(msg=f"Attempting to request settings data via USB serial.", fg='grey')
+    disconnect_bluetooth()
+    echo = send_usb(pkt)
+
+    if echo == ECHO_PKT:
+        print(f"{info_prefix}PC payload: {REQUEST_PKT}")
+        # use set_data() function to build the settings received from echo!
+        #set_data()
+    else:
+        print(f"{info_prefix}No echo received")
+
 # ──────────────── Packet helpers ────────────────────────────────────
 """Build the payload data"""
 def build_payload() -> str:
@@ -378,9 +399,20 @@ def load_settings():
         with open(SETTING_FILE, 'r') as f:
             settings = json.load(f)
         # Clear existing rows then load new rows
+        set_data(settings.get("rows", []), settings.get("cycles", default_cycles))
+        debug_print_value()
+        return True
+    except Exception as e:
+        print(f"{error_prefix}Loading settings: {e}")
+        messagebox.showerror("Error", f"Failed to load from {SETTING_FILE}: {e}")
+        return False
+
+"""Parent function to load new settings into the program and replaces the old one"""
+def set_data(new_settings, new_cycles):
+    try:
         while len(rows) > 0:
             delete_row(0)   
-        for row in settings.get("rows", []):
+        for row in new_settings:
             add_new_row()
             i = len(rows) - 1
             rows[i]['vars']['color'].set(enum_color(row.get("color")))         # Update color button's color
@@ -390,17 +422,12 @@ def load_settings():
             rows[i]['vars']['off_time'].set(row.get("off_time", 1))
             update_params(i)
             update_row_style(i)
-        cycles.set(settings.get("cycles", default_cycles))
-
-        info_status(msg=f"Settings loaded from {SETTING_FILE} successfully!", fg='blue')
-        debug_print_value()
-        return True
+        cycles.set(new_cycles)
+        info_status(msg=f"Settings loaded successfully from {SETTING_FILE}!", fg='blue')
     except Exception as e:
-        print(f"{error_prefix}Loading settings: {e}")
         messagebox.showerror("Error", f"Failed to load from {SETTING_FILE}: {e}")
-        return False
 
-"""Save configuration to file"""
+"""Save connection configuration to file"""
 def save_config(mode, com_port, bt_mac):
     try:
         with open(CONFIG_FILE, 'w') as f:
@@ -412,7 +439,7 @@ def save_config(mode, com_port, bt_mac):
         print(f"{error_prefix}Saving config: {e}")
         messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
 
-"""Load configuration from file or return defaults"""
+"""Load connection configuration from file or return defaults"""
 def load_config():
     if not os.path.exists(CONFIG_FILE):
         return {"mode": 0, "com_port": "", "bt_mac": ""}
@@ -433,7 +460,8 @@ def load_config():
                 bt_mac.set(config["bt_mac"])
     except Exception as e:
         print(f"{error_prefix}Loading config: {e}")
-        messagebox.showerror("Error", f"Error whilst loading {CONFIG_FILE}: {e}!") 
+        messagebox.showerror("Error", f"Error whilst loading {CONFIG_FILE}, now falling back to default config: {e}!") 
+        save_config(0, "", "") # Reset config file if it went wrong.
     return config
 
 # ──────────────── GUI connection cfg ──────────────────────────────
@@ -743,26 +771,27 @@ for col, h in enumerate(headers):
     table.grid_columnconfigure(col, weight=1)
 
 # footer buttons
-ttk.Button(footer, text=add_row_text, width=15, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
-send_btn = ttk.Button(footer, text=send_text, width=15, bootstyle="success-outline", command=send_action)
+ttk.Button(footer, text=add_row_text, width=12, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
+send_btn = ttk.Button(footer, text=send_text, width=10, bootstyle="success-outline", command=send_action)
 send_btn.grid(row=0, column=1, padx=5, pady=5)
+ttk.Button(footer, text="Request Data", width=12, bootstyle="secondary-outline", command=request_data).grid(row=0, column=2, padx=5, pady=5)
 
 row_counter = ttk.Label(footer, textvariable=row_count_var)
-row_counter.grid(row=0, column=2, padx=10, pady=5)
+row_counter.grid(row=0, column=3, padx=10, pady=5)
 
-ttk.Label(footer, text="Cycles").grid(row=0, column=3, padx=(20, 5), pady=5)
-ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=4, padx=5, pady=5)
-ttk.Button(footer, text="Configure Connection", width=18, bootstyle="warning-outline", command=config_window).grid(row=0, column=5, padx=5, pady=5)
-ttk.Button(footer, text="Save Settings", width=12, bootstyle="primary-outline", command=save_settings).grid(row=0, column=6, padx=5, pady=5)
-ttk.Button(footer, text="Load Settings", width=12, bootstyle="info-outline", command=load_settings).grid(row=0, column=7, padx=5, pady=5)
+ttk.Label(footer, text="Cycles").grid(row=0, column=4, padx=(20, 5), pady=5)
+ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=5, padx=5, pady=5)
+ttk.Button(footer, text="Connection", width=12, bootstyle="warning-outline", command=config_window).grid(row=0, column=6, padx=5, pady=5)
+ttk.Button(footer, text="Save Settings", width=12, bootstyle="primary-outline", command=save_settings).grid(row=0, column=7, padx=5, pady=5)
+ttk.Button(footer, text="Load Settings", width=12, bootstyle="info-outline", command=load_settings).grid(row=0, column=8, padx=5, pady=5)
 
 # Connection type and port status
-mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
-mode_indicator.pack(side="left", padx=(0, 10))
 port_indicator = ttk.Label(status_frame, text="Unknown")
-port_indicator.pack(side="left")
+port_indicator.pack(side="right")
+mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
+mode_indicator.pack(side="right", padx=(0, 10))
 status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
-status_indicator.pack(side="right")
+status_indicator.pack(side="left")
 
 add_new_row()  # first empty row
 load_config()
