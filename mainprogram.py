@@ -1,11 +1,12 @@
 """
-IC-Project : Mini-Flasher GUI - build 0624
+IC-Project : Mini-Flasher GUI - build 0625
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Function to send requesting packet data to the ESP32 and reflect the settings.
-2. Post the correct com ports one-by-one if USB is selected
+2. Poll the correct USB COM ports one-by-one when the program starts 
+(partly done here, next need to test with real hardware)
 3. Check the language for Chinese-languaged Windows PC
 """
 
@@ -26,13 +27,17 @@ For macOS user, pls make sure to pip install python-lightblue, and blueutil
 # ──────────────── Global configuration ───────────────────────────────
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
-REQUEST_PKT         = "need_data"
-ECHO_PKT            = "data_here"
+POLLING_PKT         = ""                # Should be no payload for polling
+POLLING_ECHO_PKT    = ""                # These 2 not sure if needed, just put them here just in case!
+REQUEST_ECHO_PKT    = ""
 TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
 HEADER1, HEADER2    = 0x5A, 0xA5
-READ_TIMEOUT_USB    = 0.3               # seconds for optional loop-back read
-READ_TIMEOUT_BT     = 0.3
+LED_SETTING         = 0x00              # Type 0: Be used when clicking "Send Data"
+POLL_LINK           = 0x01              # Type 1: Be used when polling the correct USB COM ports one-by-one once the program starts
+READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request Data"
+READ_TIMEOUT_USB    = 2                 # USB: seconds for optional loop-back read
+READ_TIMEOUT_BT     = 0.3               # BLUETOOTH: seconds for optional loop-back read
 COOLDOWN            = 10
 
 device_name         = "ESP32"
@@ -107,7 +112,6 @@ def connect_bluetooth():
             print(f"{error_prefix}Could not find matching serial port for {bt_name}.")
             messagebox.showerror("Error", f"Could not find serial port for {bt_name}.")
             return False
-
         try:
             print(f"{info_prefix}Connecting to {dev_path}")
             bt_socket = serial.Serial(
@@ -191,8 +195,6 @@ def refresh_bt_list(combo):
     try:
         devices = bluetooth.discover_devices(duration=8, lookup_names=True)
         print(f"{info_prefix}Found {len(devices)} Bluetooth devices")
-
-        # Format device list: "Device Name (MAC Address)"
         device_list = [f"{name} ({addr})" for addr, name in devices]
         root.after(0, lambda: update_bt_list(combo, device_list))
     except Exception as e:
@@ -207,7 +209,6 @@ def update_bt_list(combo, device_list):
         combo["values"] = []
         bt_mac.set("")
         return
-    
     combo["values"] = device_list
     combo.set(device_list[0])
 
@@ -243,6 +244,7 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
         else:  # Windows/Linux
             bt_socket.send(packet)
         echo = b""
+        # Below echo part is just for contingency in case it needs to receive something back!
         if expect_echo:
             echo = bt_socket.recv(expect_echo)
             print(f"{info_prefix}Received echo: {bar_hex(echo)}")
@@ -277,6 +279,81 @@ def refresh_port_list(combo):
     else:
         port_var.set("")
 
+"""Automatically detect the correct USB port by sending polling packets"""
+def usb_polling():
+    if mode_var.get() != 0:  # Skip if not in USB mode
+        return
+    
+    info_status("Detecting device on USB ports...", fg='grey')
+    root.update()
+    ports = available_ports()
+    if not ports:
+        info_status("No USB ports available", fg='red')
+        return
+    port_dict = {p[0]: p[1] for p in ports}  
+    pkt = build_packet(1, POLLING_PKT) # Type 1
+    print(f"{info_prefix}Polling packet: {bar_hex(pkt)}")
+    
+    # Try saved port if available
+    saved_port = port_var.get().split(' ')[0] if port_var.get() else ""
+    ports_to_try = [saved_port] if saved_port and saved_port in port_dict else []
+    
+    # Add other ports not already in the list and try each of them
+    ports_to_try += [p[0] for p in ports if p[0] not in ports_to_try]
+    for port_device in ports_to_try:
+        if not port_device: 
+            continue
+        info_status(f"Initialization: Trying to connect with {port_device}...", fg='grey')
+        root.update()
+        echo = usb_polling_send(port_device, pkt, len(pkt))
+        if echo == pkt:
+            # Found matching device if the echo packet equals to the original packet!
+            port_str = f"{port_device}  –  {port_dict[port_device]}"
+            port_var.set(port_str)
+            info_status(f"Device found on {port_str}", fg='green')
+            update_status()
+            save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
+            return
+    info_status(f"{attention_prefix}No target device detected on USB ports, please check the connection and try again in Configuration menu.", fg='red')
+
+"""Parent function that tries to send a packet to a specific port and return echo if received"""
+def usb_polling_send(port_device, packet, expect_echo=0) -> bytes:    
+    try:
+        usb_socket = serial.Serial(port_device, BAUDRATE, timeout=READ_TIMEOUT_USB)
+        with usb_socket as ser:
+            n = ser.write(packet)
+            print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port_device}")
+            if expect_echo:
+                echo = ser.read(expect_echo)
+                print(f"PC  echo:  {bar_hex(echo)}")
+                return echo
+    except serial.SerialException as e:
+        print(f"{error_prefix}opening {port_device}: {e}")
+    finally:
+        disconnect_usb()
+        return b""
+
+
+"""Function to request configuration data from ESP32 device"""
+def request_data():
+    if mode_var.get() != 0:
+        info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
+        return
+    pkt = build_packet(2, POLLING_PKT) # Type 2
+    print(f"{info_prefix}PC payload: {POLLING_PKT}")
+    print(f"{info_prefix}PC packet : {bar_hex(pkt)}")   # ← uses grouped view
+    
+    info_status(msg=f"Attempting to request settings data via USB serial.", fg='grey')
+    disconnect_bluetooth()
+    echo = send_usb(pkt, len(pkt))
+
+    if echo == pkt:
+        pass
+        # use set_data() function to build the settings received from echo!
+        #set_data()
+    else:
+        print(f"{info_prefix}No echo received")
+
 """Disconnect from USB Port"""
 def disconnect_usb():
     global usb_socket
@@ -304,9 +381,10 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
         with usb_socket as ser:
             n = ser.write(packet)
             print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
+            # Below echo part is used when type 2 is used (reading from ESP32)
             if expect_echo:
                 echo = ser.read(expect_echo)
-                print(f"PC  echo  {bar_hex(echo)}")
+                print(f"PC  echo:  {bar_hex(echo)}")
                 return echo
             info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!", fg='green')
     except serial.SerialException as e:
@@ -315,43 +393,27 @@ def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
 
     print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
 
-"""Function to request configuration data from ESP32 device"""
-def request_data():
-    if mode_var.get() != 0:
-        info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
-        return
-    build_packet(REQUEST_PKT)
-    pkt = build_packet(REQUEST_PKT)
-    
-    info_status(msg=f"Attempting to request settings data via USB serial.", fg='grey')
-    disconnect_bluetooth()
-    echo = send_usb(pkt)
-
-    if echo == ECHO_PKT:
-        print(f"{info_prefix}PC payload: {REQUEST_PKT}")
-        # use set_data() function to build the settings received from echo!
-        #set_data()
-    else:
-        print(f"{info_prefix}No echo received")
-
 # ──────────────── Packet helpers ────────────────────────────────────
 """Build the payload data"""
 def build_payload() -> str:
     pieces=[]
     for i in range(len(params)):
-        if params[i][0] == 'N':
+        if params[i][0] == 'N': # if there exists a sequence with no colour selected
             return False
         pieces.extend(map(str,params[i]))
     pieces.extend(["C", str(cycles.get())])
     return ",".join(pieces)
 
 """Build the packet data with the header and payload data"""
-def build_packet(payload: str) -> bytes:
+def build_packet(type: int, payload: str) -> bytes:
     sync   = bytes([HEADER1, HEADER2])
+    datatype = bytes([LED_SETTING]) if type == 0 else bytes([POLL_LINK]) if type == 1 else bytes([READ_SETTING])
     data   = payload.encode('ascii')
     length = len(data).to_bytes(2, 'little')
-    chk    = (sum(sync + length + data) & 0xFFFF).to_bytes(2, 'little')
-    return sync + length + data + chk
+    chk    = (sum(sync + length + datatype + data) & 0xFFFF).to_bytes(2, 'little')
+
+    print(f"{info_prefix}Header: {sync}, dataType: {datatype}")
+    return sync + length + datatype + data + chk
 
 """Convert bytes to grouped hex string, e.g. b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'"""
 def bar_hex(pkt: bytes, chunk: int = 5) -> str:
@@ -480,42 +542,10 @@ def config_window():
     config_win.resizable(False, False)
     config_win.grab_set()
     load_config()
-    
-    # Mode selection
-    mode_frame = ttk.Frame(config_win)
-    mode_frame.pack(fill='x', padx=20, pady=10)
-    
-    ttk.Label(mode_frame, text="Connection Mode:").grid(row=0, column=0, sticky='w', padx=(0,10))
-    ttk.Radiobutton(mode_frame, text="USB Serial", variable=mode_var, value=0).grid(row=0, column=1, sticky='w', padx=5)
-    ttk.Radiobutton(mode_frame, text="Bluetooth SPP", variable=mode_var, value=1).grid(row=0, column=2, sticky='w', padx=5)
-    
-    # Port selection
-    val_frame = ttk.Frame(config_win)
-    val_frame.pack(fill='x', padx=20, pady=10)
-    
-    ttk.Label(val_frame, text="USB COM Port:").grid(row=0, column=0, sticky='w', padx=(0,10))
-    port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
-    port_combo.grid(row=0, column=1, sticky='ew', padx=5)
-    refresh_port_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=lambda: refresh_port_list(port_combo), bootstyle="secondary-outline")
-    refresh_port_btn.grid(row=0, column=2, padx=(5, 0))
 
-    ttk.Label(val_frame, text="Bluetooth Host:").grid(row=1, column=0, sticky='w', padx=(0,10))
-    btmac_combo = ttk.Combobox(val_frame, textvariable=bt_mac, width=20)
-    btmac_combo.grid(row=1, column=1, sticky='ew', padx=5)
-    refresh_bt_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=lambda: refresh_bt_list(btmac_combo), bootstyle="secondary-outline")
-    refresh_bt_btn.grid(row=1, column=2, padx=(5, 0))
-
-    # Other selection
-    other_frame = ttk.Frame(config_win)
-    other_frame.pack(fill='x', padx=20, pady=10)
-
-    ttk.Label(other_frame, text="Total Time Allowed:").grid(row=2, column=0, sticky='w', padx=(0,10))
-    ttk.Spinbox(other_frame, textvariable=time_allow, from_=1, to=100, width=5).grid(row=2, column=1, sticky='ew', padx=5)
-    ttk.Label(other_frame, text="minute(s)").grid(row=2, column=2, sticky='w', padx=(0,10))
-
-    # Buttons
-    btn_frame = ttk.Frame(config_win)
-    btn_frame.pack(fill='x', pady=20)
+    def on_usb_refresh():
+        config_win.destroy()
+        usb_polling()
 
     def on_cancel():
         config_win.destroy()
@@ -557,6 +587,42 @@ def config_window():
            - Unpair and pair the {device_name} again
         """
         messagebox.showinfo("Connection Help", help_text)
+    
+    # Mode selection
+    mode_frame = ttk.Frame(config_win)
+    mode_frame.pack(fill='x', padx=20, pady=10)
+    
+    ttk.Label(mode_frame, text="Connection Mode:").grid(row=0, column=0, sticky='w', padx=(0,10))
+    ttk.Radiobutton(mode_frame, text="USB Serial", variable=mode_var, value=0).grid(row=0, column=1, sticky='w', padx=5)
+    ttk.Radiobutton(mode_frame, text="Bluetooth SPP", variable=mode_var, value=1).grid(row=0, column=2, sticky='w', padx=5)
+    
+    # Port selection
+    val_frame = ttk.Frame(config_win)
+    val_frame.pack(fill='x', padx=20, pady=10)
+    
+    ttk.Label(val_frame, text="USB COM Port:").grid(row=0, column=0, sticky='w', padx=(0,10))
+    port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
+    port_combo.grid(row=0, column=1, sticky='ew', padx=5)
+    refresh_port_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=on_usb_refresh, bootstyle="secondary-outline") # before: command=lambda: refresh_port_list(port_combo)
+    refresh_port_btn.grid(row=0, column=2, padx=(5, 0))
+
+    ttk.Label(val_frame, text="Bluetooth Host:").grid(row=1, column=0, sticky='w', padx=(0,10))
+    btmac_combo = ttk.Combobox(val_frame, textvariable=bt_mac, width=20)
+    btmac_combo.grid(row=1, column=1, sticky='ew', padx=5)
+    refresh_bt_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=lambda: refresh_bt_list(btmac_combo), bootstyle="secondary-outline")
+    refresh_bt_btn.grid(row=1, column=2, padx=(5, 0))
+
+    # Other selection
+    other_frame = ttk.Frame(config_win)
+    other_frame.pack(fill='x', padx=20, pady=10)
+
+    ttk.Label(other_frame, text="Total Time Allowed:").grid(row=2, column=0, sticky='w', padx=(0,10))
+    ttk.Spinbox(other_frame, textvariable=time_allow, from_=1, to=100, width=5).grid(row=2, column=1, sticky='ew', padx=5)
+    ttk.Label(other_frame, text="minute(s)").grid(row=2, column=2, sticky='w', padx=(0,10))
+
+    # Buttons
+    btn_frame = ttk.Frame(config_win)
+    btn_frame.pack(fill='x', pady=20)
 
     ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info", width=5).pack(side='left', padx=20)
     ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary", width=8).pack(side='right', padx=20)
@@ -729,18 +795,18 @@ def send_action():
         return
     # Second, check number of rows
     if len(rows) < 1:
-        info_status(msg=f"{attention_prefix}Please add at least 1 colour row!", fg='red')
+        info_status(msg=f"{attention_prefix}Please add at least 1 colour sequence!", fg='red')
         return
     # Third, check if the payload is valid (e.g. no invalid colour)
     payload = build_payload()
     if not payload:
-        info_status(msg=f"{attention_prefix}Please select a colour on 1 or more colour row(s)!", fg='red')
+        info_status(msg=f"{attention_prefix}Please select a colour on 1 or more colour sequence(s)!", fg='red')
         return
     # Forth, check if the total time exceed the time allowed set
     if (total_time.get() > time_allow.get()):
-        info_status(msg=f"{attention_prefix}Total time exceeded the time allowed! ({time_allow.get()})", fg='red')
+        info_status(msg=f"{attention_prefix}Total time exceeded the time allowed! ({time_allow.get()} minutes)", fg='red')
         return
-    pkt = build_packet(payload)
+    pkt = build_packet(0, payload) # Type 0
     print(f"{info_prefix}PC payload: {payload}")
     print(f"{info_prefix}PC packet : {bar_hex(pkt)}")   # ← uses grouped view
 
@@ -842,7 +908,7 @@ table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 status_frame.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
 footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
 
-root.after(50, config_window)
+root.after(50, usb_polling)
 def on_closing():
     print(f"{info_prefix}Closing app")
     disconnect_bluetooth()
