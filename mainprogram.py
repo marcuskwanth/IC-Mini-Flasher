@@ -5,6 +5,8 @@ Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Function to send requesting packet data to the ESP32 and reflect the settings.
+2. Post the correct com ports one-by-one
+3. Check the language for Chinese-languaged Windows PC
 """
 
 import tkinter as tk
@@ -18,7 +20,7 @@ import bluetooth, glob, platform
 Package "pybluez", please follow this github comment for proper installation, make sure to pip install backports.tarfile first. 
 https://github.com/pybluez/pybluez/issues/431#issuecomment-2191842543
 For Windows user, pls make sure Microsoft Visual C++ 14.0 is installed 
-For macOS user, pls make sure to pip install python-lightblue
+For macOS user, pls make sure to pip install python-lightblue, and blueutil
 """
 
 # ──────────────── Global configuration ───────────────────────────────
@@ -35,18 +37,20 @@ COOLDOWN            = 10
 
 device_name         = "ESP32"
 last_send_time      = 0                 # Track when last send occurred
+buttons_width       = 10
 intensity_color     = 'dark'
 off_time_color      = 'secondary'
 row_num_text        = "Sequences: "
 select_text         = "<Please Select>"
 delete_text         = "X"
 refresh_text        = "↻"
-add_row_text        = "Add Colour Row"
+add_row_text        = "Add Sequence"
 send_text           = "Send Data"
 info_prefix         = "*INFO: "
 error_prefix        = "*ERROR: "
 attention_prefix    = "ATTENTION: "     # info prefix but shown in GUI instead of console
 default_cycles      = 5
+default_time_allow  = 10                # in minutes
 
 max_intensity       = 255
 max_on_off_time     = 100
@@ -69,7 +73,6 @@ def enum_color(c): # Short-form to long-form
 # ──────────────── Tk root window ─────────────────────────────────────
 root = tk.Tk()
 root.title("IC-Project  ·  Mini-Flasher GUI")
-row_count_var = tk.StringVar(value=f"{row_num_text}?")
 
 # ──────────────── Bluetooth SPP utilities ────────────────────────────
 bt_socket = None
@@ -350,10 +353,7 @@ def build_packet(payload: str) -> bytes:
     chk    = (sum(sync + length + data) & 0xFFFF).to_bytes(2, 'little')
     return sync + length + data + chk
 
-"""
-Convert bytes to grouped hex string, e.g.
-b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'
-"""
+"""Convert bytes to grouped hex string, e.g. b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'"""
 def bar_hex(pkt: bytes, chunk: int = 5) -> str:
     hexbytes = pkt.hex(' ').split()                    # ['5a', 'a5', ...]
     groups   = [' '.join(hexbytes[i:i+chunk])          # 5-byte slices
@@ -361,8 +361,16 @@ def bar_hex(pkt: bytes, chunk: int = 5) -> str:
     return ' | '.join(groups)
 
 # ──────────────── GUI data structures ───────────────────────────────
-rows, params = [], []   # rows = structure + values shown in the boxes, params = values stored in the program
+# Changable by user
+time_allow = tk.IntVar(value=default_time_allow)
 cycles = tk.IntVar(value=default_cycles)
+cycles.trace_add("write", lambda *_: update_total_time())
+
+# Fixed by the program
+rows, params = [], []   # rows = structure + values shown in the boxes, params = values stored in the program
+row_count_var = tk.StringVar(value=f"{row_num_text}?")
+total_time = tk.DoubleVar(value=0.00)
+total_time_var = tk.StringVar(value=f"Total Time: {total_time} min")
 
 # ──────────────── GUI File I/O ──────────────────────────────────────
 """Save current settings to file"""
@@ -428,13 +436,14 @@ def set_data(new_settings, new_cycles):
         messagebox.showerror("Error", f"Failed to load from {SETTING_FILE}: {e}")
 
 """Save connection configuration to file"""
-def save_config(mode, com_port, bt_mac):
+def save_config(mode, com_port, bt_mac, time):
     try:
         with open(CONFIG_FILE, 'w') as f:
             f.write(f"mode={mode}\n")
             f.write(f"com_port={com_port}\n")
             f.write(f"bt_mac={bt_mac}\n")
-        info_status(msg=f"Connection settings saved, now using {'USB' if mode == 0 else 'Bluetooth'}.", fg='grey')
+            f.write(f"time_allow={time}\n")
+        info_status(msg=f"Configurations saved, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
     except Exception as e:
         print(f"{error_prefix}Saving config: {e}")
         messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
@@ -442,8 +451,8 @@ def save_config(mode, com_port, bt_mac):
 """Load connection configuration from file or return defaults"""
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return {"mode": 0, "com_port": "", "bt_mac": ""}
-    config = {"mode": 0, "com_port": "", "bt_mac": ""}
+        return {"mode": 0, "com_port": "", "bt_mac": "", "time_allow": default_time_allow}
+    config = {"mode": 0, "com_port": "", "bt_mac": "", "time_allow": default_time_allow}
     try:
         with open(CONFIG_FILE, 'r') as f:
             for line in f:
@@ -454,21 +463,24 @@ def load_config():
                     config["com_port"] = value
                 elif key == "bt_mac":
                     config["bt_mac"] = value
+                elif key == "time_allow":
+                    config["time_allow"] = value
                 # Sequence for setting the config values into the variables
                 mode_var.set(config["mode"])
                 port_var.set(config["com_port"])
                 bt_mac.set(config["bt_mac"])
+                time_allow.set(config["time_allow"])
     except Exception as e:
         print(f"{error_prefix}Loading config: {e}")
         messagebox.showerror("Error", f"Error whilst loading {CONFIG_FILE}, now falling back to default config: {e}!") 
-        save_config(0, "", "") # Reset config file if it went wrong.
+        save_config(0, "", "", default_time_allow) # Reset config file if it went wrong.
     return config
 
 # ──────────────── GUI connection cfg ──────────────────────────────
 """The code for the connection setting window"""
 def config_window():
     config_win = tk.Toplevel(root)
-    config_win.title("IC-Project  ·  Connection Settings")
+    config_win.title("IC-Project  ·  Configurations")
     config_win.resizable(False, False)
     config_win.grab_set()
     load_config()
@@ -477,7 +489,7 @@ def config_window():
     mode_frame = ttk.Frame(config_win)
     mode_frame.pack(fill='x', padx=20, pady=10)
     
-    ttk.Label(mode_frame, text="Connection Mode:").grid(row=0, column=0, sticky='w', padx=(0, 10))
+    ttk.Label(mode_frame, text="Connection Mode:").grid(row=0, column=0, sticky='w', padx=(0,10))
     ttk.Radiobutton(mode_frame, text="USB Serial", variable=mode_var, value=0).grid(row=0, column=1, sticky='w', padx=5)
     ttk.Radiobutton(mode_frame, text="Bluetooth SPP", variable=mode_var, value=1).grid(row=0, column=2, sticky='w', padx=5)
     
@@ -485,20 +497,27 @@ def config_window():
     val_frame = ttk.Frame(config_win)
     val_frame.pack(fill='x', padx=20, pady=10)
     
-    ttk.Label(val_frame, text="USB COM Port:").grid(row=0, column=0, sticky='w', padx=(0, 10))
-    port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=25)
+    ttk.Label(val_frame, text="USB COM Port:").grid(row=0, column=0, sticky='w', padx=(0,10))
+    port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
     port_combo.grid(row=0, column=1, sticky='ew', padx=5)
-
-    ttk.Label(val_frame, text="Bluetooth Host:").grid(row=1, column=0, sticky='w', padx=(0,10))
-    btmac_combo = ttk.Combobox(val_frame, textvariable=bt_mac, width=25)
-    btmac_combo.grid(row=1, column=1, sticky='ew', padx=5)
-    
     refresh_port_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=lambda: refresh_port_list(port_combo), bootstyle="secondary-outline")
     refresh_port_btn.grid(row=0, column=2, padx=(5, 0))
 
+    ttk.Label(val_frame, text="Bluetooth Host:").grid(row=1, column=0, sticky='w', padx=(0,10))
+    btmac_combo = ttk.Combobox(val_frame, textvariable=bt_mac, width=20)
+    btmac_combo.grid(row=1, column=1, sticky='ew', padx=5)
     refresh_bt_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=lambda: refresh_bt_list(btmac_combo), bootstyle="secondary-outline")
     refresh_bt_btn.grid(row=1, column=2, padx=(5, 0))
-    
+
+    # Other selection
+    other_frame = ttk.Frame(config_win)
+    other_frame.pack(fill='x', padx=20, pady=10)
+
+    ttk.Label(other_frame, text="Total Time Allowed:").grid(row=2, column=0, sticky='w', padx=(0,10))
+    btmac_combo = ttk.Spinbox(other_frame, textvariable=time_allow, width=5)
+    btmac_combo.grid(row=2, column=1, sticky='ew', padx=5)
+    ttk.Label(other_frame, text="minute(s)").grid(row=2, column=2, sticky='w', padx=(0,10))
+
     # Buttons
     btn_frame = ttk.Frame(config_win)
     btn_frame.pack(fill='x', pady=20)
@@ -508,7 +527,7 @@ def config_window():
         config_win.destroy()
 
     def on_save():
-        save_config(mode_var.get(), port_var.get(), bt_mac.get())
+        save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
         update_status()
         config_win.destroy()
 
@@ -559,6 +578,7 @@ def debug_print_value():
     print(f"====================")
     for i in range(len(rows)):
         print(f"{rows[i]['vars']['color'].get()}, {rows[i]['vars']['intensity'].get()}, {rows[i]['vars']['on_time'].get()}, {rows[i]['vars']['off_time'].get()}; ", end="")
+    print(f"\ntotal_time: {total_time.get()}")
     print(f"\n{params} \n====================\n")
     
 """Validate spinbox input and clamp to min/max values"""
@@ -586,6 +606,8 @@ def update_params(i, _=None):
                  int(values['intensity'].get()),
                  int(values['on_time'].get()),
                  int(values['off_time'].get())]
+    
+    update_total_time()
     debug_print_value()
 
 """Update the color of the sliders when the color selection changes"""
@@ -667,6 +689,8 @@ def add_new_row():
     update_row_style(i)
 
     row_count_var.set(f"{row_num_text}{len(rows)}")
+    update_total_time()
+
     info_status(msg=f"Added colour row {i+1} successfully!", fg='grey')
     print(f"{info_prefix}added row {i+1}, current number of rows: {len(rows)}")
     debug_print_value()
@@ -682,38 +706,46 @@ def delete_row(i):
     for idx in range(i, len(rows)):
         for col, widget in enumerate(rows[idx]['widgets']):
             widget.grid(row=idx+1, column=col)
+        rows[idx]['widgets'][-1].config(command=lambda idx=idx: delete_row(idx))
 
         for name in rows[idx]['traces']:
             rows[idx]['vars'][name].trace_remove("write", rows[idx]['traces'][name])
         rows[idx]['traces'] = {}
+
         for name in rows[idx]['vars']:
-            rows[idx]['traces'][name] = rows[idx]['vars'][name].trace_add(
-                "write", lambda *_, idx=idx, n=name: update_params(idx, n))
+            rows[idx]['traces'][name] = rows[idx]['vars'][name].trace_add("write", lambda *_, idx=idx, n=name: update_params(idx, n))
         
         rows[idx]['vars']['color'].trace_remove("write", rows[idx]['color_trace'])
-        rows[idx]['color_trace'] = rows[idx]['vars']['color'].trace_add(
-            "write", lambda *_, idx=idx: update_row_style(idx))
+        rows[idx]['color_trace'] = rows[idx]['vars']['color'].trace_add("write", lambda *_, idx=idx: update_row_style(idx))
 
     row_count_var.set(f"{row_num_text}{len(rows)}")
+    update_total_time()
+
     info_status(msg=f"Deleted colour row {i+1} successfully!", fg='grey')
     print(f"{info_prefix}deleted row {i+1}, current number of rows: {len(rows)}")
     debug_print_value()
 
 """Callback for the send to ESP32 button"""
 def send_action():
-    # Check cooldown first
+    # First, check cooldown
     global last_send_time
     current_time = time.time()
     if current_time - last_send_time < COOLDOWN:
         remaining = int(COOLDOWN - (current_time - last_send_time))
         info_status(msg=f"{attention_prefix}Please wait for {remaining} seconds before sending again.", fg='red')
         return
+    # Second, check number of rows
     if len(rows) < 1:
         info_status(msg=f"{attention_prefix}Please add at least 1 colour row!", fg='red')
         return
+    # Third, check if the payload is valid (e.g. no invalid colour)
     payload = build_payload()
     if not payload:
         info_status(msg=f"{attention_prefix}Please select a colour on 1 or more colour row(s)!", fg='red')
+        return
+    # Forth, check if the total time exceed the time allowed set
+    if (total_time.get() > time_allow.get()):
+        info_status(msg=f"{attention_prefix}Total time exceeded the time allowed! ({time_allow.get()})", fg='red')
         return
     pkt = build_packet(payload)
     print(f"{info_prefix}PC payload: {payload}")
@@ -743,6 +775,17 @@ def update_send_button():
     else:
         send_btn.config(text=send_text, state="normal")
 
+"""Calculate the total time of all sequences"""
+def update_total_time():
+    global total_time
+    total_ms = 0
+    for row in params:
+        cycle_ms = (row[2] + row[3]) * 100
+        total_ms += cycle_ms * cycles.get()
+    total_min = total_ms / (1000 * 60)  # Convert to minutes
+    total_time.set(total_min)
+    total_time_var.set(f"Total Time: {total_time.get():.2f} min")
+
 """Update connection status indicators"""
 def update_status():
     mode_text = "USB" if mode_var.get() == 0 else "Bluetooth"
@@ -771,19 +814,21 @@ for col, h in enumerate(headers):
     table.grid_columnconfigure(col, weight=1)
 
 # footer buttons
-ttk.Button(footer, text=add_row_text, width=12, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
-send_btn = ttk.Button(footer, text=send_text, width=10, bootstyle="success-outline", command=send_action)
+ttk.Button(footer, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
+send_btn = ttk.Button(footer, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
 send_btn.grid(row=0, column=1, padx=5, pady=5)
-ttk.Button(footer, text="Request Data", width=12, bootstyle="secondary-outline", command=request_data).grid(row=0, column=2, padx=5, pady=5)
+ttk.Button(footer, text="Request Data", width=buttons_width, bootstyle="secondary-outline", command=request_data).grid(row=0, column=2, padx=5, pady=5)
 
 row_counter = ttk.Label(footer, textvariable=row_count_var)
 row_counter.grid(row=0, column=3, padx=10, pady=5)
+total_time_label = ttk.Label(footer, textvariable=total_time_var)
+total_time_label.grid(row=0, column=4, padx=10, pady=5)
 
-ttk.Label(footer, text="Cycles").grid(row=0, column=4, padx=(20, 5), pady=5)
-ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=5, padx=5, pady=5)
-ttk.Button(footer, text="Configuration", width=12, bootstyle="warning-outline", command=config_window).grid(row=0, column=6, padx=5, pady=5)
-ttk.Button(footer, text="Save Settings", width=12, bootstyle="primary-outline", command=save_settings).grid(row=0, column=7, padx=5, pady=5)
-ttk.Button(footer, text="Load Settings", width=12, bootstyle="info-outline", command=load_settings).grid(row=0, column=8, padx=5, pady=5)
+ttk.Label(footer, text="Cycles").grid(row=0, column=5, padx=(20, 5), pady=5)
+ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=6, padx=5, pady=5)
+ttk.Button(footer, text="Configuration", width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
+ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
+ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
 
 # Connection type and port status
 port_indicator = ttk.Label(status_frame, text="Unknown")
@@ -793,7 +838,9 @@ mode_indicator.pack(side="right", padx=(0, 10))
 status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
 status_indicator.pack(side="left")
 
+# Initializations
 add_new_row()  # first empty row
+update_total_time()
 load_config()
 update_status()
 

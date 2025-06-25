@@ -45,7 +45,7 @@
         {
             "color": "B",
             "intensity": 220,
-            "on_time": 25,
+            "on_time": 3,
             "off_time": 46
         },
         {
@@ -55,5 +55,5 @@
             "off_time": 66
         }
     ],
-    "cycles": 47
+    "cycles": 7
 }

@@ -1,3 +1,4 @@
-mode=0
+mode=1
 com_port=/dev/cu.usbserial-110  –  USB Serial
 bt_mac=IC-MINI_FLASHER (a0-b7-65-44-96-76)
+time_allow=10
