@@ -5,7 +5,7 @@ Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Function to send requesting packet data to the ESP32 and reflect the settings.
-2. Post the correct com ports one-by-one
+2. Post the correct com ports one-by-one if USB is selected
 3. Check the language for Chinese-languaged Windows PC
 """
 
@@ -439,10 +439,9 @@ def set_data(new_settings, new_cycles):
 def save_config(mode, com_port, bt_mac, time):
     try:
         with open(CONFIG_FILE, 'w') as f:
-            f.write(f"mode={mode}\n")
-            f.write(f"com_port={com_port}\n")
-            f.write(f"bt_mac={bt_mac}\n")
-            f.write(f"time_allow={time}\n")
+            f.write(f"USB_COM={com_port}\n")
+            f.write(f"BT_MAC={bt_mac}\n")
+            f.write(f"MAX_LED_Time={time}\n")
         info_status(msg=f"Configurations saved, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
     except Exception as e:
         print(f"{error_prefix}Saving config: {e}")
@@ -451,25 +450,22 @@ def save_config(mode, com_port, bt_mac, time):
 """Load connection configuration from file or return defaults"""
 def load_config():
     if not os.path.exists(CONFIG_FILE):
-        return {"mode": 0, "com_port": "", "bt_mac": "", "time_allow": default_time_allow}
-    config = {"mode": 0, "com_port": "", "bt_mac": "", "time_allow": default_time_allow}
+        return {"USB_COM": "", "BT_MAC": "", "MAX_LED_Time": default_time_allow}
+    config = {"USB_COM": "", "BT_MAC": "", "MAX_LED_Time": default_time_allow}
     try:
         with open(CONFIG_FILE, 'r') as f:
             for line in f:
                 key, value = line.strip().split('=', 1)
-                if key == "mode":
-                    config["mode"] = int(value)
-                elif key == "com_port":
-                    config["com_port"] = value
-                elif key == "bt_mac":
-                    config["bt_mac"] = value
-                elif key == "time_allow":
-                    config["time_allow"] = value
+                if key == "USB_COM":
+                    config["USB_COM"] = value
+                elif key == "BT_MAC":
+                    config["BT_MAC"] = value
+                elif key == "MAX_LED_Time":
+                    config["MAX_LED_Time"] = value
                 # Sequence for setting the config values into the variables
-                mode_var.set(config["mode"])
-                port_var.set(config["com_port"])
-                bt_mac.set(config["bt_mac"])
-                time_allow.set(config["time_allow"])
+                port_var.set(config["USB_COM"])
+                bt_mac.set(config["BT_MAC"])
+                time_allow.set(config["MAX_LED_Time"])
     except Exception as e:
         print(f"{error_prefix}Loading config: {e}")
         messagebox.showerror("Error", f"Error whilst loading {CONFIG_FILE}, now falling back to default config: {e}!") 
@@ -514,8 +510,7 @@ def config_window():
     other_frame.pack(fill='x', padx=20, pady=10)
 
     ttk.Label(other_frame, text="Total Time Allowed:").grid(row=2, column=0, sticky='w', padx=(0,10))
-    btmac_combo = ttk.Spinbox(other_frame, textvariable=time_allow, width=5)
-    btmac_combo.grid(row=2, column=1, sticky='ew', padx=5)
+    ttk.Spinbox(other_frame, textvariable=time_allow, from_=1, to=100, width=5).grid(row=2, column=1, sticky='ew', padx=5)
     ttk.Label(other_frame, text="minute(s)").grid(row=2, column=2, sticky='w', padx=(0,10))
 
     # Buttons
@@ -523,7 +518,6 @@ def config_window():
     btn_frame.pack(fill='x', pady=20)
 
     def on_cancel():
-        info_status(msg=f"Ready to send to {device_name}.", fg='grey')
         config_win.destroy()
 
     def on_save():
@@ -558,13 +552,12 @@ def config_window():
            - Open System Preferences > Bluetooth
            - Pair with the correct device
            - Click the Refresh button to update the list
-        4. If device doesn't appear:
+        4. If device doesn't appear / cannot connect:
            - Ensure it's not connected to another PC
-           - Re-pair the {device_name}
+           - Unpair and pair the {device_name} again
         """
         messagebox.showinfo("Connection Help", help_text)
 
-    # Add Help button to button frame
     ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info", width=5).pack(side='left', padx=20)
     ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary", width=8).pack(side='right', padx=20)
     ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success", width=8).pack(side='right')
@@ -573,7 +566,7 @@ def config_window():
     
 
 # ──────────────── GUI callbacks ─────────────────────────────────────
-"""Printing out the values of rows and params"""
+"""Debugging: Printing out the values of rows and params"""
 def debug_print_value():
     print(f"====================")
     for i in range(len(rows)):
