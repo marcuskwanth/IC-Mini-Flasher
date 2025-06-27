@@ -1,13 +1,14 @@
 """
-IC-Project : Mini-Flasher GUI - build 0625
+IC-Project : Mini-Flasher GUI - build 250627.1
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
-1. Function to send requesting packet data to the ESP32 and reflect the settings.
-2. Poll the correct USB COM ports one-by-one when the program starts 
-(partly done here, next need to test with real hardware)
+*1. Function to send requesting packet data to the ESP32 and reflect the settings (with the same packet layout as send data)
+*2. Poll the correct USB COM ports one-by-one when the program starts
 3. Check the language for Chinese-languaged Windows PC
+
+*Partly done here, next need to test with real hardware
 """
 
 import tkinter as tk
@@ -16,52 +17,78 @@ import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import serial, serial.tools.list_ports, json, subprocess, os, time
 
-import bluetooth, glob, platform
+import bluetooth, glob, platform, threading
 """
-Package "pybluez", please follow this github comment for proper installation, make sure to pip install backports.tarfile first. 
+Package "pybluez", please follow this github comment for proper installation, make sure to 'pip install backports.tarfile' first. 
 https://github.com/pybluez/pybluez/issues/431#issuecomment-2191842543
 For Windows user, pls make sure Microsoft Visual C++ 14.0 is installed 
-For macOS user, pls make sure to pip install python-lightblue, and blueutil
+For macOS user, pls make sure to 'pip install python-lightblue', and 'brew install blueutil'
 """
 
+# ──────────────── Tk root window ─────────────────────────────────────
+root = tk.Tk()
+root.title("IC-Project  ·  Mini-Flasher GUI")
+cfg_wintitle = "IC-Project  ·  Configurations"
+
 # ──────────────── Global configuration ───────────────────────────────
+INIT_SCAN           = 0                 # 0 = disable USB COM polling functionality, 1 = enable
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
-POLLING_PKT         = ""                # Should be no payload for polling
+POLLING_PKT         = ""                # Any payload for USB COM polling?
+REQUEST_PKT         = ""                # Any payload for requesting data?
 POLLING_ECHO_PKT    = ""                # These 2 not sure if needed, just put them here just in case!
 REQUEST_ECHO_PKT    = ""
 TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
+READ_TIMEOUT_USB    = 1                 # USB: seconds for optional loop-back read
+READ_TIMEOUT_BT     = 1               # BLUETOOTH: seconds for optional loop-back read
+COOLDOWN            = 10                # Send button cooldown in seconds
+
+# ──────────────── Packet Header configuration ────────────────────────
 HEADER1, HEADER2    = 0x5A, 0xA5
 LED_SETTING         = 0x00              # Type 0: Be used when clicking "Send Data"
 POLL_LINK           = 0x01              # Type 1: Be used when polling the correct USB COM ports one-by-one once the program starts
 READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request Data"
-READ_TIMEOUT_USB    = 2                 # USB: seconds for optional loop-back read
-READ_TIMEOUT_BT     = 0.3               # BLUETOOTH: seconds for optional loop-back read
-COOLDOWN            = 10
 
+# ──────────────── GUI/Console Elements configuration ─────────────────
 device_name         = "ESP32"
-last_send_time      = 0                 # Track when last send occurred
 buttons_width       = 10
-intensity_color     = 'dark'
-off_time_color      = 'secondary'
 row_num_text        = "Sequences: "
 select_text         = "<Please Select>"
 delete_text         = "X"
 refresh_text        = "↻"
 add_row_text        = "Add Sequence"
 send_text           = "Send Data"
-info_prefix         = "*INFO: "
-error_prefix        = "*ERROR: "
-attention_prefix    = "ATTENTION: "     # info prefix but shown in GUI instead of console
+request_text        = "Request Data"
+cfg_text            = "Configuration"
+info_prefix         = "*INFO: "         # Shown in console
+error_prefix        = "*ERROR: "        # Shown in console
+attention_prefix    = "ATTENTION: "     # info_prefix but shown in GUI status bar instead of console
+
+# ──────────────── GUI var configuration ──────────────────────────────
 default_cycles      = 5
 default_time_allow  = 10                # in minutes
-
 max_intensity       = 255
 max_on_off_time     = 100
-max_row             = 250               # max no. of table rows
+max_row             = 250               # max no. of colour sequences
 
-headers = ['Colour', 'Intensity (0-255)','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
+last_send_time      = 0                 # Track when last send occurred (during cooldown)
+
+# ──────────────── GUI data structures ───────────────────────────────
+# Changable by user
+time_allow = tk.IntVar(value=default_time_allow)
+cycles = tk.IntVar(value=default_cycles)
+cycles.trace_add("write", lambda *_: update_total_time())
+
+# Fixed by the program
+bt_socket = None
+usb_socket = None
+rows, params = [], []                                                   # rows = structure + values shown in the boxes, params = values stored in the program
+row_count_var = tk.StringVar(value=f"{row_num_text}?")
+total_time = tk.DoubleVar(value=0.00)                                   # Stored in the program
+total_time_var = tk.StringVar(value=f"Total Time: {total_time} min")    # Displayed in the GUI
+
+headers = ['Colour', f'Intensity (0-{max_intensity})','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
 colors  = ["Red","Green","Blue","Infrared"]
 colors_mapper = {
     "Red":"danger",
@@ -75,12 +102,7 @@ def color_enum(c): # Long-form to short-form
 def enum_color(c): # Short-form to long-form
     return {'R':'Red','G':'Green','B':'Blue','I':'Infrared'}.get(c,select_text)
 
-# ──────────────── Tk root window ─────────────────────────────────────
-root = tk.Tk()
-root.title("IC-Project  ·  Mini-Flasher GUI")
-
 # ──────────────── Bluetooth SPP utilities ────────────────────────────
-bt_socket = None
 bt_connected = False
 bt_mac = tk.StringVar(value="")         # bluetooth mac address 
 
@@ -229,6 +251,8 @@ def disconnect_bluetooth():
 """Send data over Bluetooth connection"""
 def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
     global bt_connected
+    if usb_socket:
+        disconnect_usb()
     if not bt_connected:
         if not connect_bluetooth():
             return b""
@@ -244,7 +268,7 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
         else:  # Windows/Linux
             bt_socket.send(packet)
         echo = b""
-        # Below echo part is just for contingency in case it needs to receive something back!
+        # Below echo part is just for contingency in case it needs to echo something back!
         if expect_echo:
             echo = bt_socket.recv(expect_echo)
             print(f"{info_prefix}Received echo: {bar_hex(echo)}")
@@ -258,7 +282,6 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
         return b""
 
 # ──────────────── USB Serial utilities ──────────────────────────────
-usb_socket = None
 port_var = tk.StringVar(value="")        # currently selected port
 
 """Return list of (device, description) tuples."""
@@ -283,7 +306,6 @@ def refresh_port_list(combo):
 def usb_polling():
     if mode_var.get() != 0:  # Skip if not in USB mode
         return
-    
     info_status("Detecting device on USB ports...", fg='grey')
     root.update()
     ports = available_ports()
@@ -291,7 +313,7 @@ def usb_polling():
         info_status("No USB ports available", fg='red')
         return
     port_dict = {p[0]: p[1] for p in ports}  
-    pkt = build_packet(1, POLLING_PKT) # Type 1
+    pkt = build_packet(POLL_LINK, POLLING_PKT) # Type 1
     print(f"{info_prefix}Polling packet: {bar_hex(pkt)}")
     
     # Try saved port if available
@@ -303,7 +325,7 @@ def usb_polling():
     for port_device in ports_to_try:
         if not port_device: 
             continue
-        info_status(f"Initialization: Trying to connect with {port_device}...", fg='grey')
+        info_status(f"Trying to connect with {port_device}...", fg='grey')
         root.update()
         echo = usb_polling_send(port_device, pkt, len(pkt))
         if echo == pkt:
@@ -314,7 +336,7 @@ def usb_polling():
             update_status()
             save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
             return
-    info_status(f"{attention_prefix}No target device detected on USB ports, please check the connection and try again in Configuration menu.", fg='red')
+    info_status(f"No target device detected on USB ports, please check the connection and try again in Configuration menu.", fg='red')
 
 """Parent function that tries to send a packet to a specific port and return echo if received"""
 def usb_polling_send(port_device, packet, expect_echo=0) -> bytes:    
@@ -333,27 +355,6 @@ def usb_polling_send(port_device, packet, expect_echo=0) -> bytes:
         disconnect_usb()
         return b""
 
-
-"""Function to request configuration data from ESP32 device"""
-def request_data():
-    if mode_var.get() != 0:
-        info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
-        return
-    pkt = build_packet(2, POLLING_PKT) # Type 2
-    print(f"{info_prefix}PC payload: {POLLING_PKT}")
-    print(f"{info_prefix}PC packet : {bar_hex(pkt)}")   # ← uses grouped view
-    
-    info_status(msg=f"Attempting to request settings data via USB serial.", fg='grey')
-    disconnect_bluetooth()
-    echo = send_usb(pkt, len(pkt))
-
-    if echo == pkt:
-        pass
-        # use set_data() function to build the settings received from echo!
-        #set_data()
-    else:
-        print(f"{info_prefix}No echo received")
-
 """Disconnect from USB Port"""
 def disconnect_usb():
     global usb_socket
@@ -368,30 +369,66 @@ def disconnect_usb():
             usb_socket = None
 
 """Open selected COM port, transmit packet, optionally read echo."""
-def send_usb(packet: bytes, expect_echo: int = 0)  -> bytes:
+def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False)  -> bytes:
     global usb_socket
+    if bt_socket:
+        disconnect_bluetooth()
     port = port_var.get()
     if " " in port:                 # ← NEW: take only first token ► "COM4"
         port = port.split()[0]      
     if not port:
         print(f"{error_prefix}No serial port selected.")
-        messagebox.showerror("Error", f"No USB serial port selected!") 
+        messagebox.showerror("Error", f"No USB serial port selected!")
     try:
         usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT_USB)
         with usb_socket as ser:
             n = ser.write(packet)
             print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
+
             # Below echo part is used when type 2 is used (reading from ESP32)
+            if read_response:
+                response = ser.read(128)  # Read enough bytes for a full response
+                print(f"{info_prefix}Reading response: {bar_hex(response)}")
+                return response
+            # For other packets
             if expect_echo:
                 echo = ser.read(expect_echo)
-                print(f"PC  echo:  {bar_hex(echo)}")
+                print(f"PC  echo  {bar_hex(echo)}")
                 return echo
             info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!", fg='green')
+            print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
     except serial.SerialException as e:
         print(f"{error_prefix}opening {port}: {e}")
         messagebox.showerror("Error", f"Error whilst opening port {port}!") 
 
-    print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
+"""Sequence for requesting configuration data from ESP32 device"""
+def request_data_prerequisite():
+    if mode_var.get() != 0:
+        info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
+        return
+    info_status(msg=f"Requesting settings from {device_name}...", fg='grey')
+    threading.Thread(target=request_data, daemon=True).start()
+def request_data():
+    pkt = build_packet(READ_SETTING, REQUEST_PKT) # Type 2
+    print(f"{info_prefix}Requesting data with packet: {bar_hex(pkt)}")
+    disconnect_bluetooth()
+
+    response = send_usb(pkt, read_response=True)
+    if not response:
+        info_status(msg="No response received from device.", fg='red')
+        return
+    decoded = decode_packet(response)
+    if not decoded:
+        info_status(msg="Invalid response format.", fg='red')
+        return
+    sequences, cycles_val = parse_payload(decoded['payload'])
+    if sequences is None:
+        info_status(msg="Could not parse device settings.", fg='red')
+        return
+
+    set_data(sequences, cycles_val)
+    info_status(msg=f"Settings received from {device_name} successfully!", fg='green')
+    print(f"{info_prefix}Loaded settings from device: {sequences} cycles={cycles_val}")
 
 # ──────────────── Packet helpers ────────────────────────────────────
 """Build the payload data"""
@@ -405,9 +442,9 @@ def build_payload() -> str:
     return ",".join(pieces)
 
 """Build the packet data with the header and payload data"""
-def build_packet(type: int, payload: str) -> bytes:
+def build_packet(type, payload: str) -> bytes:
     sync   = bytes([HEADER1, HEADER2])
-    datatype = bytes([LED_SETTING]) if type == 0 else bytes([POLL_LINK]) if type == 1 else bytes([READ_SETTING])
+    datatype = bytes([type])
     data   = payload.encode('ascii')
     length = len(data).to_bytes(2, 'little')
     chk    = (sum(sync + length + datatype + data) & 0xFFFF).to_bytes(2, 'little')
@@ -422,17 +459,62 @@ def bar_hex(pkt: bytes, chunk: int = 5) -> str:
                 for i in range(0, len(hexbytes), chunk)]
     return ' | '.join(groups)
 
-# ──────────────── GUI data structures ───────────────────────────────
-# Changable by user
-time_allow = tk.IntVar(value=default_time_allow)
-cycles = tk.IntVar(value=default_cycles)
-cycles.trace_add("write", lambda *_: update_total_time())
+"""Decode the received packet in requesting data (Type 2)"""
+def decode_packet(packet: bytes) -> dict:
+    try:
+        if len(packet) < 7 or packet[0] != HEADER1 or packet[1] != HEADER2:
+            print(f"{error_prefix}Invalid packet header")
+            return None
+        # Extract components
+        length = int.from_bytes(packet[2:4], 'little')
+        data_type = packet[4]
+        payload = packet[5:5+length].decode('ascii')
+        checksum = int.from_bytes(packet[-2:], 'little')
 
-# Fixed by the program
-rows, params = [], []   # rows = structure + values shown in the boxes, params = values stored in the program
-row_count_var = tk.StringVar(value=f"{row_num_text}?")
-total_time = tk.DoubleVar(value=0.00)
-total_time_var = tk.StringVar(value=f"Total Time: {total_time} min")
+        calculated_csum = sum(packet[:-2]) & 0xFFFF
+        if checksum != calculated_csum:
+            print(f"{error_prefix}Checksum mismatch: {checksum} vs {calculated_csum}")
+            return None 
+        
+        print(f"{info_prefix}Received valid packet: type={data_type}, payload={payload}")
+        return {'type': data_type, 'payload': payload}
+    except Exception as e:
+        messagebox.showerror("Error", f"Payload decoding failed: {e}")
+        print(f"{error_prefix}Decoding failed: {e}")
+        return None
+
+"""Parse the payload data from the decoded payload above"""
+def parse_payload(payload: str) -> tuple:
+    try:
+        # Split payload into components
+        parts = payload.split(',')
+        if len(parts) < 4 or (len(parts) - 2) % 4 != 0:  # Account for cycles marker
+            print(f"{error_prefix}Invalid payload structure")
+            return None, None
+        sequences = []
+        cycles_val = default_cycles
+        i = 0
+
+        while i < len(parts):
+            if parts[i] == 'C':  # Cycle marker
+                cycles_val = int(parts[i+1])
+                break
+            color_char = parts[i]
+            intensity = int(parts[i+1])
+            on_time = int(parts[i+2])
+            off_time = int(parts[i+3])
+            sequences.append({
+                'color': enum_color(color_char),
+                'intensity': intensity,
+                'on_time': on_time,
+                'off_time': off_time
+            })
+            i += 4
+        return sequences, cycles_val
+    except Exception as e:
+        messagebox.showerror("Error", f"Payload parsing failed: {e}")
+        print(f"{error_prefix}Payload parsing failed: {e}")
+        return None, None
 
 # ──────────────── GUI File I/O ──────────────────────────────────────
 """Save current settings to file"""
@@ -485,6 +567,11 @@ def set_data(new_settings, new_cycles):
         for row in new_settings:
             add_new_row()
             i = len(rows) - 1
+            '''
+            color_name = row.get("color", select_text)
+            rows[i]['vars']['color'].set(color_name)
+            rows[i]['widgets'][0].config(text=color_name)
+            '''
             rows[i]['vars']['color'].set(enum_color(row.get("color")))         # Update color button's color
             rows[i]['widgets'][0].config(text=enum_color(row.get("color")))    # Update color button's text
             rows[i]['vars']['intensity'].set(row.get("intensity", max_intensity))
@@ -538,14 +625,17 @@ def load_config():
 """The code for the connection setting window"""
 def config_window():
     config_win = tk.Toplevel(root)
-    config_win.title("IC-Project  ·  Configurations")
+    config_win.title(cfg_wintitle)
     config_win.resizable(False, False)
     config_win.grab_set()
     load_config()
 
     def on_usb_refresh():
-        config_win.destroy()
-        usb_polling()
+        if INIT_SCAN == 1:
+            config_win.destroy()
+            usb_polling()
+        else: 
+            refresh_port_list(port_combo)
 
     def on_cancel():
         config_win.destroy()
@@ -558,7 +648,7 @@ def config_window():
     # HELP FUNCTION: Shows instructions for finding ports/devices
     def show_help():
         help_text = f"""
-        How to find USB Serial Port / Bluetooth Host:
+        Help: How to find USB Serial Port / Bluetooth Host?
         
         USB Serial Port (COM Port):
         1. Connect your {device_name} via USB
@@ -630,7 +720,6 @@ def config_window():
 
     config_win.wait_window(config_win)
     
-
 # ──────────────── GUI callbacks ─────────────────────────────────────
 """Debugging: Printing out the values of rows and params"""
 def debug_print_value():
@@ -701,15 +790,15 @@ def add_new_row():
 
     intensity_spin = ttk.Spinbox(
         table, textvariable=v['intensity'], from_=1, to=max_intensity, 
-        width=2, bootstyle=intensity_color, command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
+        width=2, bootstyle='dark', command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
     )
     on_spin = ttk.Spinbox(
         table, textvariable=v['on_time'], from_=1, to=max_on_off_time, 
-        width=2, bootstyle="secondary", command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
+        width=2, bootstyle='secondary', command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
     )
     off_spin = ttk.Spinbox(
         table, textvariable=v['off_time'], from_=1, to=max_on_off_time, 
-        width=2, bootstyle=off_time_color, command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
+        width=2, bootstyle='secondary', command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
     )
     on_update  = lambda val: v['on_time'].set(int(float(val)))
     off_update = lambda val: v['off_time'].set(int(float(val)))
@@ -722,8 +811,8 @@ def add_new_row():
         intensity_spin,
         on_spin,
         off_spin,
-        ttk.Scale(table, variable=v['on_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=on_update, bootstyle="secondary"),
-        ttk.Scale(table, variable=v['off_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=off_update, bootstyle=off_time_color),
+        ttk.Scale(table, variable=v['on_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=on_update, bootstyle='secondary'),
+        ttk.Scale(table, variable=v['off_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=off_update, bootstyle='secondary'),
         del_button
     ]
     for col, widget in enumerate(w):
@@ -806,7 +895,7 @@ def send_action():
     if (total_time.get() > time_allow.get()):
         info_status(msg=f"{attention_prefix}Total time exceeded the time allowed! ({time_allow.get()} minutes)", fg='red')
         return
-    pkt = build_packet(0, payload) # Type 0
+    pkt = build_packet(LED_SETTING, payload) # Type 0
     print(f"{info_prefix}PC payload: {payload}")
     print(f"{info_prefix}PC packet : {bar_hex(pkt)}")   # ← uses grouped view
 
@@ -816,12 +905,10 @@ def send_action():
     
     if mode_var.get() == 0:  # USB mode
         info_status(msg=f"Attempting to send via USB serial.", fg='grey')
-        disconnect_bluetooth()
-        send_usb(pkt)
+        threading.Thread(target=lambda: send_usb(pkt), daemon=True).start()
     else:  # Bluetooth mode
         info_status(msg=f"Attempting to send via Bluetooth.", fg='grey')
-        disconnect_usb()
-        send_bluetooth(pkt)
+        threading.Thread(target=lambda: send_bluetooth(pkt), daemon=True).start()
 
 # Additional Function to update button status during cooldown
 def update_send_button():
@@ -872,11 +959,11 @@ for col, h in enumerate(headers):
     ttk.Label(table, text=h).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
     table.grid_columnconfigure(col, weight=1)
 
-# footer buttons
+# footer buttons, labels, and spinbox
 ttk.Button(footer, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
 send_btn = ttk.Button(footer, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
 send_btn.grid(row=0, column=1, padx=5, pady=5)
-ttk.Button(footer, text="Request Data", width=buttons_width, bootstyle="secondary-outline", command=request_data).grid(row=0, column=2, padx=5, pady=5)
+ttk.Button(footer, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).grid(row=0, column=2, padx=5, pady=5)
 
 row_counter = ttk.Label(footer, textvariable=row_count_var)
 row_counter.grid(row=0, column=3, padx=10, pady=5)
@@ -885,7 +972,8 @@ total_time_label.grid(row=0, column=4, padx=10, pady=5)
 
 ttk.Label(footer, text="Cycles").grid(row=0, column=5, padx=(20, 5), pady=5)
 ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=6, padx=5, pady=5)
-ttk.Button(footer, text="Configuration", width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
+
+ttk.Button(footer, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
 ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
 ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
 
@@ -908,7 +996,7 @@ table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 status_frame.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
 footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
 
-root.after(50, usb_polling)
+root.after(50, usb_polling if INIT_SCAN == 1 else config_window)
 def on_closing():
     print(f"{info_prefix}Closing app")
     disconnect_bluetooth()
