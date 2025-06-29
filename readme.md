@@ -1,5 +1,7 @@
 Version 250629.3
 - Implemented a new layout (buttons are now on the left side), the old layout can still be used by changing a parameter (NEW_LAYOUT)
+- Updated the rows table so that it is not scrollable if its number grows
+- Updated the position on the MMI_OnTime column
 - Updated the delete button to the left side instead of the right side
 - Added a confirmation box on Send Data, Request Data, Save Settings, and Load Settings buttons
 - Updated the logic on deleting a row
