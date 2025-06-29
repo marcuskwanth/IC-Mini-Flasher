@@ -34,7 +34,7 @@
             "color": "G",
             "intensity": 233,
             "on_time": 17,
-            "off_time": 34
+            "off_time": 35
         },
         {
             "color": "I",
@@ -46,14 +46,50 @@
             "color": "B",
             "intensity": 220,
             "on_time": 3,
-            "off_time": 46
+            "off_time": 47
         },
         {
             "color": "G",
             "intensity": 255,
             "on_time": 100,
-            "off_time": 66
+            "off_time": 67
+        },
+        {
+            "color": "B",
+            "intensity": 255,
+            "on_time": 1,
+            "off_time": 3
+        },
+        {
+            "color": "G",
+            "intensity": 255,
+            "on_time": 46,
+            "off_time": 69
+        },
+        {
+            "color": "G",
+            "intensity": 255,
+            "on_time": 100,
+            "off_time": 28
+        },
+        {
+            "color": "I",
+            "intensity": 255,
+            "on_time": 33,
+            "off_time": 1
+        },
+        {
+            "color": "R",
+            "intensity": 255,
+            "on_time": 90,
+            "off_time": 100
+        },
+        {
+            "color": "G",
+            "intensity": 255,
+            "on_time": 46,
+            "off_time": 61
         }
     ],
-    "cycles": 7
+    "cycles": 4
 }

@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 250629.2
+IC-Project : Mini-Flasher GUI - build 250629.3
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -31,6 +31,7 @@ cfg_wintitle = "IC-Project  ·  Configurations"
 
 # ──────────────── Global configuration ───────────────────────────────
 INIT_SCAN           = 0                 # 0 = disable USB COM polling functionality, 1 = enable
+NEW_LAYOUT          = 1                 # 0 = with original layout, 1 = new layout with the buttons on LHS
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
 POLLING_PKT         = ""                # Any payload for USB COM polling?
@@ -51,7 +52,9 @@ READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request
 
 # ──────────────── GUI/Console Elements configuration ─────────────────
 device_name         = "ESP32"
-buttons_width       = 10
+buttons_width       = 15
+box_mmi_width       = 15
+scale_thres         = 70
 row_num_text        = "Sequences: "
 select_text         = "<Please Select>"
 delete_text         = "X"
@@ -87,7 +90,7 @@ row_count_var = tk.StringVar(value=f"{row_num_text}?")
 total_time = tk.DoubleVar(value=0.00)                                   # Stored in the program
 total_time_var = tk.StringVar(value=f"Total Time: {total_time} min")    # Displayed in the GUI
 
-headers = ['Colour', f'Intensity (0-{max_intensity})','On_Time (100 ms)','Off_Time (100 ms)', 'MMI On_Time','MMI Off_Time', 'Remove']
+headers = ['Remove', 'Colour', f'Intensity (0-{max_intensity})','On_Time (100 ms)', 'MMI On_Time', 'Off_Time (100 ms)', 'MMI Off_Time']
 colors  = ["Red","Green","Blue","Infrared"]
 colors_mapper = {
     "Red":"danger",
@@ -406,7 +409,9 @@ def request_data_prerequisite():
         info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
         return
     info_status(msg=f"Requesting settings from {device_name}...", fg='grey')
-    threading.Thread(target=request_data, daemon=True).start()
+    result = messagebox.askyesno(request_text, "This action will override the current colour sequeence settings, are you sure you want to proceed?")
+    if result:
+        request_data() # Removed threading to improve performance
 def request_data():
     pkt = build_packet(READ_SETTING, REQUEST_PKT) # Type 2
     print(f"{info_prefix}Requesting data with packet: {bar_hex(pkt)}")
@@ -426,7 +431,7 @@ def request_data():
         return
 
     set_data(sequences, cycles_val)
-    info_status(msg=f"Settings received from {device_name} successfully!", fg='green')
+    info_status(msg=f"Settings pulled from {device_name} successfully!", fg='blue')
     print(f"{info_prefix}Loaded settings from device: {sequences} cycles={cycles_val}")
 
 # ──────────────── Packet helpers ────────────────────────────────────
@@ -460,6 +465,42 @@ def bar_hex(pkt: bytes, chunk: int = 5) -> str:
         return ' | '.join(groups)
     except Exception as e:
         print(f"{error_prefix}Error whilst parasing hex data: {e}")
+
+"""Read one packet at a time"""
+def read_one_packet(ser, timeout=1.0) -> bytes:
+    start     = time.time()
+    state     = 0          # 0 = want 0x5A, 1 = want 0xA5, 2 = have hdr
+    hdr       = bytearray()
+    length    = 0
+    payload   = bytearray()
+
+    while time.time() - start < timeout:
+        if not ser.in_waiting:
+            time.sleep(0.001)
+            continue
+        b = ser.read(1)[0]
+
+        # --- sync --------------------------------------------------
+        if state == 0:                # waiting for 0x5A
+            if b == 0x5A:
+                hdr.append(b); state = 1
+            continue
+        if state == 1:                # waiting for 0xA5
+            if b == 0xA5:
+                hdr.append(b); state = 2
+            else:
+                hdr.clear(); state = 0
+            continue
+
+        # --- we already have 0x5A 0xA5 -----------------------------
+        hdr.append(b)
+        if len(hdr) == 4:             # LEN1 LEN2 just arrived
+            length = int.from_bytes(hdr[2:4], 'little')
+
+        if len(hdr) == 5 + length + 2:  # 5=hdr+type, +payload, +csum16
+            return bytes(hdr)          # done
+
+    return b''                         # timeout
 
 """Decode the received packet in requesting data (Type 2)"""
 def decode_packet(packet: bytes) -> dict:
@@ -521,7 +562,9 @@ def parse_payload(payload: str) -> tuple:
 # ──────────────── GUI File I/O ──────────────────────────────────────
 """Save current settings to file"""
 def save_settings():
-    debug_print_value()
+    result = messagebox.askyesno("Save Settings", "This action will override the settings file, are you sure you want to proceed?")
+    if not result:
+        return
     settings = {
         "rows": [],
         "cycles": cycles.get()
@@ -545,6 +588,9 @@ def save_settings():
 
 """Load settings from file"""
 def load_settings():
+    result = messagebox.askyesno("Load Settings", "This action will override the current colour sequeence settings, are you sure you want to proceed?")
+    if not result:
+        return
     if not os.path.exists(SETTING_FILE): 
         info_status(msg=f"{attention_prefix}{SETTING_FILE} not found. Save settings first to create such file!", fg='red')
         return False
@@ -575,7 +621,7 @@ def set_data(new_settings, new_cycles):
             rows[i]['widgets'][0].config(text=color_name)
             '''
             rows[i]['vars']['color'].set(enum_color(row.get("color")))         # Update color button's color
-            rows[i]['widgets'][0].config(text=enum_color(row.get("color")))    # Update color button's text
+            rows[i]['widgets'][1].config(text=enum_color(row.get("color")))    # Update color button's text
             rows[i]['vars']['intensity'].set(row.get("intensity", max_intensity))
             rows[i]['vars']['on_time'].set(row.get("on_time", 1))
             rows[i]['vars']['off_time'].set(row.get("off_time", 1))
@@ -716,9 +762,9 @@ def config_window():
     btn_frame = ttk.Frame(config_win)
     btn_frame.pack(fill='x', pady=20)
 
-    ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info", width=5).pack(side='left', padx=20)
-    ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary", width=8).pack(side='right', padx=20)
-    ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success", width=8).pack(side='right')
+    ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info-outline", width=5).pack(side='left', padx=20)
+    ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary-outline", width=8).pack(side='right', padx=20)
+    ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success-outline", width=8).pack(side='right')
 
     config_win.wait_window(config_win)
     
@@ -764,9 +810,9 @@ def update_params(i, _=None):
 def update_row_style(i):
     if i >= len(rows): return
     style = colors_mapper.get(rows[i]['vars']['color'].get(), "secondary")
-    rows[i]['widgets'][0].configure(bootstyle=style)
-    rows[i]['widgets'][2].configure(bootstyle=style)
-    rows[i]['widgets'][4].configure(bootstyle=style)
+    rows[i]['widgets'][1].configure(bootstyle=style)  # Colour button
+    rows[i]['widgets'][3].configure(bootstyle=style)  # On spinbox
+    rows[i]['widgets'][4].configure(bootstyle=style)  # On scale
 
 """Callback for the add row button"""
 def add_new_row():
@@ -780,7 +826,10 @@ def add_new_row():
          'on_time':   ttk.IntVar(value=1),
          'off_time':  ttk.IntVar(value=1)}
     
-    col_button = ttk.Menubutton(table, text=v['color'].get(), width=12, bootstyle="secondary")
+    row_ref = {'id': i}  # Create a unique reference for this row
+
+    del_button = ttk.Button(table, text=delete_text, width=2, command=lambda idx=i: delete_row(idx), bootstyle="danger")
+    col_button = ttk.Menubutton(table, text=v['color'].get(), width=buttons_width, bootstyle="secondary")
     menu = tk.Menu(col_button); 
     col_button['menu'] = menu
     def choose(c):
@@ -792,30 +841,28 @@ def add_new_row():
 
     intensity_spin = ttk.Spinbox(
         table, textvariable=v['intensity'], from_=1, to=max_intensity, 
-        width=2, bootstyle='dark', command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
+        width=box_mmi_width, bootstyle='dark', command=lambda: validate_spinbox(v['intensity'], 1, max_intensity)
     )
     on_spin = ttk.Spinbox(
         table, textvariable=v['on_time'], from_=1, to=max_on_off_time, 
-        width=2, bootstyle='secondary', command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
+        width=box_mmi_width, bootstyle='secondary', command=lambda: validate_spinbox(v['on_time'], 1, max_on_off_time)
     )
     off_spin = ttk.Spinbox(
         table, textvariable=v['off_time'], from_=1, to=max_on_off_time, 
-        width=2, bootstyle='secondary', command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
+        width=box_mmi_width, bootstyle='secondary', command=lambda: validate_spinbox(v['off_time'], 1, max_on_off_time)
     )
     on_update  = lambda val: v['on_time'].set(int(float(val)))
     off_update = lambda val: v['off_time'].set(int(float(val)))
 
-    del_button = ttk.Button(table, text=delete_text, width=2, command=lambda idx=i: delete_row(idx), bootstyle="danger")
-
     # widgets
     w = [
+        del_button,
         col_button,
         intensity_spin,
         on_spin,
+        ttk.Scale(table, variable=v['on_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, length=max_on_off_time+scale_thres, command=on_update, bootstyle='secondary'),
         off_spin,
-        ttk.Scale(table, variable=v['on_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=on_update, bootstyle='secondary'),
-        ttk.Scale(table, variable=v['off_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, command=off_update, bootstyle='secondary'),
-        del_button
+        ttk.Scale(table, variable=v['off_time'], from_=1, to=max_on_off_time, orient=HORIZONTAL, length=max_on_off_time+scale_thres, command=off_update, bootstyle='secondary'),
     ]
     for col, widget in enumerate(w):
         widget.grid(row=i+1, column=col, padx=5, pady=5, sticky="nsew")
@@ -830,7 +877,8 @@ def add_new_row():
         'widgets': w, 
         'vars': v,
         'traces': traces,
-        'color_trace': color_trace
+        'color_trace': color_trace,
+        'ref': row_ref
     })
     params.append([color_enum(v['color'].get()), 
                    int(v['intensity'].get()), 
@@ -846,27 +894,41 @@ def add_new_row():
     debug_print_value()
 
 """Callback for the delete button on each row"""
+def delete_row_by_ref(row_ref):
+    # Find the row index by reference
+    for i, row in enumerate(rows):
+        if row['ref'] == row_ref:
+            delete_row(i)
+            break
 def delete_row(i):
     if i >= len(rows): return
+    
+    for name in rows[i]['traces']:
+        rows[i]['vars'][name].trace_remove("write", rows[i]['traces'][name])
+    rows[i]['vars']['color'].trace_remove("write", rows[i]['color_trace'])
+    
     for w in rows[i]['widgets']:
         w.destroy()
-    del rows[i], params[i]
-
-    # re-grid rows and update the variable traces below
-    for idx in range(i, len(rows)):
-        for col, widget in enumerate(rows[idx]['widgets']):
+    del rows[i]
+    del params[i]
+    
+    # Re-grid all remaining rows to ensure proper indexing
+    for idx, row in enumerate(rows):
+        for col, widget in enumerate(row['widgets']):
             widget.grid(row=idx+1, column=col)
-        rows[idx]['widgets'][-1].config(command=lambda idx=idx: delete_row(idx))
-
-        for name in rows[idx]['traces']:
-            rows[idx]['vars'][name].trace_remove("write", rows[idx]['traces'][name])
-        rows[idx]['traces'] = {}
-
-        for name in rows[idx]['vars']:
-            rows[idx]['traces'][name] = rows[idx]['vars'][name].trace_add("write", lambda *_, idx=idx, n=name: update_params(idx, n))
         
-        rows[idx]['vars']['color'].trace_remove("write", rows[idx]['color_trace'])
-        rows[idx]['color_trace'] = rows[idx]['vars']['color'].trace_add("write", lambda *_, idx=idx: update_row_style(idx))
+        row['widgets'][0].config(command=lambda r=row['ref']: delete_row_by_ref(r))
+        
+        for name in row['traces']:
+            row['vars'][name].trace_remove("write", row['traces'][name])
+        row['traces'] = {}
+        for name in row['vars']:
+            row['traces'][name] = row['vars'][name].trace_add(
+                "write", lambda *_, idx=idx, n=name: update_params(idx, n))
+        
+        row['vars']['color'].trace_remove("write", row['color_trace'])
+        row['color_trace'] = row['vars']['color'].trace_add(
+            "write", lambda *_, idx=idx: update_row_style(idx))
 
     row_count_var.set(f"{row_num_text}{len(rows)}")
     update_total_time()
@@ -896,6 +958,9 @@ def send_action():
     # Forth, check if the total time exceed the time allowed set
     if (total_time.get() > time_allow.get()):
         info_status(msg=f"{attention_prefix}Total time exceeded the time allowed! ({time_allow.get()} minutes)", fg='red')
+        return
+    result = messagebox.askyesno(send_text, f"This action will override the {device_name}'s current setting in the flash memory, are you sure you want to proceed?")
+    if not result:
         return
     pkt = build_packet(LED_SETTING, payload) # Type 0
     print(f"{info_prefix}PC payload: {payload}")
@@ -948,91 +1013,126 @@ def update_status():
 """Update the status indicator text"""
 def info_status(msg="Unknown.", fg='grey'):
     status_indicator.config(text=msg, foreground=fg)
-
-def read_one_packet(ser, timeout=1.0) -> bytes:
-    start     = time.time()
-    state     = 0          # 0 = want 0x5A, 1 = want 0xA5, 2 = have hdr
-    hdr       = bytearray()
-    length    = 0
-    payload   = bytearray()
-
-    while time.time() - start < timeout:
-        if not ser.in_waiting:
-            time.sleep(0.001)
-            continue
-        b = ser.read(1)[0]
-
-        # --- sync --------------------------------------------------
-        if state == 0:                # waiting for 0x5A
-            if b == 0x5A:
-                hdr.append(b); state = 1
-            continue
-        if state == 1:                # waiting for 0xA5
-            if b == 0xA5:
-                hdr.append(b); state = 2
-            else:
-                hdr.clear(); state = 0
-            continue
-
-        # --- we already have 0x5A 0xA5 -----------------------------
-        hdr.append(b)
-        if len(hdr) == 4:             # LEN1 LEN2 just arrived
-            length = int.from_bytes(hdr[2:4], 'little')
-
-        if len(hdr) == 5 + length + 2:  # 5=hdr+type, +payload, +csum16
-            return bytes(hdr)          # done
-
-    return b''                         # timeout
 # ──────────────── GUI layout ────────────────────────────────────────
-main   = ttk.Frame(root); 
-main.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-table  = ttk.Frame(main)
-footer = ttk.Frame(main, relief='ridge')
-status_frame = ttk.Frame(main)
 
-# table header
+if NEW_LAYOUT == 1: # New layout
+    root.geometry("1200x600")
+    root.resizable(False, False)  # Allow vertical resizing
+
+    main = ttk.Frame(root)
+    main.pack(side="top", fill=tk.BOTH, expand=True, padx=10, pady=10)
+    controls = ttk.Frame(main)
+    controls.pack(side="left", fill=tk.Y, padx=(0, 10))
+    table = ttk.Frame(main)
+    table.pack(side="right", fill=tk.BOTH, expand=True, padx=(0, 3))
+
+    footer = ttk.Frame(root)
+    footer.pack(side="bottom", fill=tk.X, padx=10, pady=10)
+    status_frame = ttk.Frame(footer, borderwidth=1)
+    status_frame.pack(fill=tk.X, pady=(5, 0))
+
+    # left-side buttons, labels, and spinbox
+    ttk.Button(controls, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).pack(pady=5, anchor="w")
+    send_btn = ttk.Button(controls, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
+    send_btn.pack(pady=5, anchor="w")
+    ttk.Button(controls, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).pack(pady=5, anchor="w")
+
+    row_counter = ttk.Label(controls, textvariable=row_count_var)
+    row_counter.pack(pady=5, anchor="w")
+
+    total_time_label = ttk.Label(controls, textvariable=total_time_var)
+    total_time_label.pack(pady=5, anchor="w")
+
+    cycleframe = ttk.Frame(controls)
+    cycleframe.pack(pady=5, anchor="w")
+    ttk.Label(cycleframe, text="Cycles").pack(side="left")
+    ttk.Spinbox(cycleframe, from_=1, to=100, textvariable=cycles, width=5).pack(side="left", padx=5)
+
+    ttk.Button(controls, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).pack(pady=5, anchor="w")
+    ttk.Button(controls, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).pack(pady=5, anchor="w")
+    ttk.Button(controls, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).pack(pady=5, anchor="w")
+
+    # Create scrollable table in right panel
+    canvas = tk.Canvas(table, borderwidth=0, highlightthickness=0)
+    scrollbar = ttk.Scrollbar(table, orient="vertical", command=canvas.yview)
+    scrollable_frame = ttk.Frame(canvas)
+    
+    # Configure canvas scrolling
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+    
+    # Function to update scroll region
+    def on_frame_configure(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+    
+    scrollable_frame.bind("<Configure>", on_frame_configure)
+    
+    # Pack canvas and scrollbar
+    canvas.pack(side="left", fill="both", expand=True)
+    scrollbar.pack(side="right", fill="y")
+    
+    # Create table inside the scrollable frame
+    table = ttk.Frame(scrollable_frame)
+    table.pack(fill="both", expand=True, anchor="nw")  # Anchor to northwest
+    
+    # Bind mouse wheel for scrolling
+    def on_mousewheel(event):
+        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+    
+    canvas.bind_all("<MouseWheel>", on_mousewheel)
+    canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+    canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
+
+else: # Old layout
+    main = ttk.Frame(root); 
+    main.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
+
+    table  = ttk.Frame(main)
+    table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+    status_frame = ttk.Frame(main)
+    status_frame.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
+    footer = ttk.Frame(main, relief='ridge')
+    footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
+
+    # footer buttons, labels, and spinbox
+    ttk.Button(footer, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
+    send_btn = ttk.Button(footer, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
+    send_btn.grid(row=0, column=1, padx=5, pady=5)
+    ttk.Button(footer, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).grid(row=0, column=2, padx=5, pady=5)
+
+    row_counter = ttk.Label(footer, textvariable=row_count_var)
+    row_counter.grid(row=0, column=3, padx=10, pady=5)
+    total_time_label = ttk.Label(footer, textvariable=total_time_var)
+    total_time_label.grid(row=0, column=4, padx=10, pady=5)
+
+    ttk.Label(footer, text="Cycles").grid(row=0, column=5, padx=(20, 5), pady=5)
+    ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=6, padx=5, pady=5)
+
+    ttk.Button(footer, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
+    ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
+    ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
+
+# Create table header
 for col, h in enumerate(headers):
-    ttk.Label(table, text=h).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
-    table.grid_columnconfigure(col, weight=1)
+    width = 8 if col == 0 else None
+    ttk.Label(table, text=h, width=width).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
+    table.grid_columnconfigure(col, weight=1 if col > 0 else 0)  # Don't expand remove column
 
-# footer buttons, labels, and spinbox
-ttk.Button(footer, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
-send_btn = ttk.Button(footer, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
-send_btn.grid(row=0, column=1, padx=5, pady=5)
-ttk.Button(footer, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).grid(row=0, column=2, padx=5, pady=5)
-
-row_counter = ttk.Label(footer, textvariable=row_count_var)
-row_counter.grid(row=0, column=3, padx=10, pady=5)
-total_time_label = ttk.Label(footer, textvariable=total_time_var)
-total_time_label.grid(row=0, column=4, padx=10, pady=5)
-
-ttk.Label(footer, text="Cycles").grid(row=0, column=5, padx=(20, 5), pady=5)
-ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=6, padx=5, pady=5)
-
-ttk.Button(footer, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
-ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
-ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
-
-# Connection type and port status
+# Status at the bottom
 port_indicator = ttk.Label(status_frame, text="Unknown")
 port_indicator.pack(side="right")
 mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
-mode_indicator.pack(side="right", padx=(0, 10))
+mode_indicator.pack(side="right", padx=(20, 10))
 status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
 status_indicator.pack(side="left")
 
-# Initializations
+# ──────────────── GUI window ────────────────────────────────────────
 add_new_row()  # first empty row
 update_total_time()
 load_config()
 update_status()
-
-# ──────────────── GUI window ────────────────────────────────────────
-table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-status_frame.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
-footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
-
 root.after(50, usb_polling if INIT_SCAN == 1 else config_window)
+
 def on_closing():
     print(f"{info_prefix}Closing app")
     disconnect_bluetooth()
