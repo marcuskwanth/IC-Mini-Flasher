@@ -1049,8 +1049,8 @@ if NEW_LAYOUT == 1: # New layout
     ttk.Spinbox(cycleframe, from_=1, to=100, textvariable=cycles, width=5).pack(side="left", padx=5)
 
     ttk.Button(controls, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).pack(pady=5, anchor="w")
-    ttk.Button(controls, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).pack(pady=5, anchor="w")
-    ttk.Button(controls, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).pack(pady=5, anchor="w")
+    ttk.Button(controls, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).pack(pady=5, side="bottom", anchor="w")
+    ttk.Button(controls, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).pack(pady=5, side="bottom", anchor="w")
 
     # Create scrollable table in right panel
     canvas = tk.Canvas(table, borderwidth=0, highlightthickness=0)

@@ -1,3 +1,6 @@
+Version 250629.4
+- Minor update on the Save Settings and Load Settings positions
+
 Version 250629.3
 - Implemented a new layout (buttons are now on the left side), the old layout can still be used by changing a parameter (NEW_LAYOUT)
 - Updated the rows table so that it is now scrollable if its number grows
