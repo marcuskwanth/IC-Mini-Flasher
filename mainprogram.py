@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 250627.1
+IC-Project : Mini-Flasher GUI - build 250629.1
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -387,7 +387,7 @@ def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False)  
 
             # Below echo part is used when type 2 is used (reading from ESP32)
             if read_response:
-                response = ser.read(128)  # Read enough bytes for a full response
+                response = read_one_packet(ser)  # Read enough bytes for a full response
                 print(f"{info_prefix}Reading response: {bar_hex(response)}")
                 return response
             # For other packets
@@ -504,7 +504,7 @@ def parse_payload(payload: str) -> tuple:
             on_time = int(parts[i+2])
             off_time = int(parts[i+3])
             sequences.append({
-                'color': enum_color(color_char),
+                'color': color_char,
                 'intensity': intensity,
                 'on_time': on_time,
                 'off_time': off_time
@@ -947,6 +947,40 @@ def update_status():
 def info_status(msg="Unknown.", fg='grey'):
     status_indicator.config(text=msg, foreground=fg)
 
+def read_one_packet(ser, timeout=1.0) -> bytes:
+    start     = time.time()
+    state     = 0          # 0 = want 0x5A, 1 = want 0xA5, 2 = have hdr
+    hdr       = bytearray()
+    length    = 0
+    payload   = bytearray()
+
+    while time.time() - start < timeout:
+        if not ser.in_waiting:
+            time.sleep(0.001)
+            continue
+        b = ser.read(1)[0]
+
+        # --- sync --------------------------------------------------
+        if state == 0:                # waiting for 0x5A
+            if b == 0x5A:
+                hdr.append(b); state = 1
+            continue
+        if state == 1:                # waiting for 0xA5
+            if b == 0xA5:
+                hdr.append(b); state = 2
+            else:
+                hdr.clear(); state = 0
+            continue
+
+        # --- we already have 0x5A 0xA5 -----------------------------
+        hdr.append(b)
+        if len(hdr) == 4:             # LEN1 LEN2 just arrived
+            length = int.from_bytes(hdr[2:4], 'little')
+
+        if len(hdr) == 5 + length + 2:  # 5=hdr+type, +payload, +csum16
+            return bytes(hdr)          # done
+
+    return b''                         # timeout
 # ──────────────── GUI layout ────────────────────────────────────────
 main   = ttk.Frame(root); 
 main.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)

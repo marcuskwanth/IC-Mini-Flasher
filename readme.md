@@ -1,3 +1,6 @@
+Version 250629.1
+- Updated the packet reading function when requesting data
+
 Version 250627.1
 - Added proper data request function (to be tested with real hardware)
 - Added a variable (INIT_SCAN) to switch between COM polling and standard refreshing mode
