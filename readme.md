@@ -1,3 +1,6 @@
+Version 250629.2
+- Added a try-catch when parasing hex data
+
 Version 250629.1
 - Updated the packet reading function when requesting data
 

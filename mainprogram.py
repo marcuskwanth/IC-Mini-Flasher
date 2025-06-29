@@ -1,12 +1,11 @@
 """
-IC-Project : Mini-Flasher GUI - build 250629.1
+IC-Project : Mini-Flasher GUI - build 250629.2
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
-*1. Function to send requesting packet data to the ESP32 and reflect the settings (with the same packet layout as send data)
-*2. Poll the correct USB COM ports one-by-one when the program starts
-3. Check the language for Chinese-languaged Windows PC
+*1. Poll the correct USB COM ports one-by-one when the program starts
+2. Check the language for Chinese-languaged Windows PC
 
 *Partly done here, next need to test with real hardware
 """
@@ -328,6 +327,7 @@ def usb_polling():
         info_status(f"Trying to connect with {port_device}...", fg='grey')
         root.update()
         echo = usb_polling_send(port_device, pkt, len(pkt))
+        print(f"{bar_hex(pkt)} vs {bar_hex(echo)}")
         if echo == pkt:
             # Found matching device if the echo packet equals to the original packet!
             port_str = f"{port_device}  –  {port_dict[port_device]}"
@@ -353,7 +353,6 @@ def usb_polling_send(port_device, packet, expect_echo=0) -> bytes:
         print(f"{error_prefix}opening {port_device}: {e}")
     finally:
         disconnect_usb()
-        return b""
 
 """Disconnect from USB Port"""
 def disconnect_usb():
@@ -454,10 +453,13 @@ def build_packet(type, payload: str) -> bytes:
 
 """Convert bytes to grouped hex string, e.g. b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'"""
 def bar_hex(pkt: bytes, chunk: int = 5) -> str:
-    hexbytes = pkt.hex(' ').split()                    # ['5a', 'a5', ...]
-    groups   = [' '.join(hexbytes[i:i+chunk])          # 5-byte slices
-                for i in range(0, len(hexbytes), chunk)]
-    return ' | '.join(groups)
+    try:
+        hexbytes = pkt.hex(' ').split()                    # ['5a', 'a5', ...]
+        groups   = [' '.join(hexbytes[i:i+chunk])          # 5-byte slices
+                    for i in range(0, len(hexbytes), chunk)]
+        return ' | '.join(groups)
+    except Exception as e:
+        print(f"{error_prefix}Error whilst parasing hex data: {e}")
 
 """Decode the received packet in requesting data (Type 2)"""
 def decode_packet(packet: bytes) -> dict:
