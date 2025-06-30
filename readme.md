@@ -1,3 +1,6 @@
+Version 250630.3
+- Update the polling time interval.
+
 Version 250630.2
 - Fixed USB COM not continuously polling after matched saved COM port
 - Fixed configuration window poping up even after correctly polled a USB COM port

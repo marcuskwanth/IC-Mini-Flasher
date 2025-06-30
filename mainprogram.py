@@ -1,11 +1,11 @@
 """
-IC-Project : Mini-Flasher GUI - build 250630.2
+IC-Project : Mini-Flasher GUI - build 250630.3
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
-*1. Poll the correct USB COM ports one-by-one when the program starts
-2. Check the language for Chinese-languaged Windows PC
+1. Check the language for Chinese-languaged Windows PC
+2. Add menu bar for non-important functions
 
 *Partly done here, next need to test with real hardware
 """
@@ -54,7 +54,7 @@ READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request
 
 # ──────────────── Poll-watchdog configuration ──────────────────────
 
-POLL_INTERVAL_MS     = 1000                 # watchdog tick   (1 s)
+POLL_INTERVAL_MS     = 1500                 # watchdog tick   (1 s)
 POLL_FAIL_TIMEOUT    = 30                   # open config dlg after 30 s consecutive failure
 
 _poll_lock           = threading.Lock()
@@ -353,7 +353,7 @@ def usb_polling():
     # first try the port remembered in config, then the remaining ones
     saved = port_var.get().split(' ')[0] if port_var.get() else ""
     order = ([saved] if saved else []) + [p[0] for p in ports if p[0] != saved]
-
+    
     echo = b""
     for dev in order:
         info_status(f"Trying to poll from {dev}...", fg='grey', type=1)
@@ -950,7 +950,7 @@ def add_new_row():
     
     row_ref = {'id': i}  # Create a unique reference for this row
 
-    del_button = ttk.Button(table, text=delete_text, width=2, command=lambda idx=i: delete_row(idx), bootstyle="danger")
+    del_button = ttk.Button(table, text=delete_text, width=2, command=lambda idx=i: delete_row(idx), bootstyle="danger-outline")
     col_button = ttk.Menubutton(table, text=v['color'].get(), width=buttons_width, bootstyle="secondary")
     menu = tk.Menu(col_button); 
     col_button['menu'] = menu
@@ -1253,7 +1253,7 @@ else: # Old layout
     ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
     ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
     if INIT_SCAN == 1:
-        ttk.Button(footer, text=usb_refresh_text, width=buttons_width, bootstyle="secondary-outline", command=usb_polling_start).grid(row=0, column=10, padx=5, pady=5)
+        ttk.Button(footer, text=usb_refresh_text, width=buttons_width, bootstyle="light-outline", command=usb_polling_start).grid(row=0, column=10, padx=5, pady=5)
 
 # Create table header
 for col, h in enumerate(headers):
