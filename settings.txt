@@ -39,7 +39,7 @@
         {
             "color": "I",
             "intensity": 255,
-            "on_time": 43,
+            "on_time": 37,
             "off_time": 100
         },
         {
@@ -56,7 +56,7 @@
         },
         {
             "color": "B",
-            "intensity": 255,
+            "intensity": 235,
             "on_time": 1,
             "off_time": 3
         },

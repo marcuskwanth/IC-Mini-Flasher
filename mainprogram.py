@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 250630.1
+IC-Project : Mini-Flasher GUI - build 250630.2
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -54,24 +54,25 @@ READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request
 
 # ──────────────── Poll-watchdog configuration ──────────────────────
 
-POLL_INTERVAL_MS     = 1000          # watchdog tick   (1 s)
-POLL_FAIL_TIMEOUT    = 30            # open config dlg after 30 s consecutive failure
+POLL_INTERVAL_MS     = 1000                 # watchdog tick   (1 s)
+POLL_FAIL_TIMEOUT    = 30                   # open config dlg after 30 s consecutive failure
 
 _poll_lock           = threading.Lock()
-_poll_sending        = threading.Event()   # raised while a user-Tx is active
-_poll_fail_since     = None                # time.time() when failure streak started
-_lock_acquired_at    = 0                  # for stale-lock detection
-_watchdog_id         = None               # after() handle so we can stop / restart
+_poll_sending        = threading.Event()    # raised while a user-Tx is active
+_poll_fail_since     = None                 # time.time() when failure streak started
+_lock_acquired_at    = 0                    # for stale-lock detection
+_watchdog_id         = None                 # after() handle so we can stop / restart
 
 # ──────────────── GUI/Console Elements configuration ─────────────────
 device_name         = "ESP32"
-buttons_width       = 15
-box_mmi_width       = 15
-scale_thres         = 70
+buttons_width       = 12
+box_mmi_width       = 10
+scale_thres         = 50
 row_num_text        = "Sequences: "
 select_text         = "<Please Select>"
 delete_text         = "X"
-refresh_text        = "↻"
+usb_refresh_text    = "↻" if INIT_SCAN == 0 else "Poll USB COM"
+bt_refresh_text     = "↻"
 add_row_text        = "Add Sequence"
 send_text           = "Send Data"
 request_text        = "Request Data"
@@ -116,6 +117,9 @@ def color_enum(c): # Long-form to short-form
     return {'Red':'R','Green':'G','Blue':'B','Infrared':'I'}.get(c,'N')
 def enum_color(c): # Short-form to long-form
     return {'R':'Red','G':'Green','B':'Blue','I':'Infrared'}.get(c,select_text)
+def resize_trigger():
+    root.update_idletasks()
+    root.geometry("")
 
 # ──────────────── Bluetooth SPP utilities ────────────────────────────
 bt_connected = False
@@ -322,6 +326,9 @@ def refresh_port_list(combo):
         port_var.set("")
 
 """Automatically detect the correct USB port by sending polling packets"""
+def usb_polling_start():
+    usb_polling()
+    root.after(POLL_INTERVAL_MS, polling_watchdog)
 def usb_polling():
     """
     Scan all available serial ports with a 7-byte poll packet.
@@ -330,12 +337,12 @@ def usb_polling():
     if mode_var.get() != 0:            # skip if GUI is in Bluetooth mode
         return
 
-    info_status("Detecting device on USB ports...", fg='grey')
+    info_status("Detecting device on USB ports...", fg='grey', type=1)
     root.update()
 
     ports = available_ports()
     if not ports:
-        info_status("No USB ports available", fg='red')
+        info_status("No USB ports available", fg='red', type=1)
         set_poll_led(False)
         return False                 
 
@@ -349,7 +356,7 @@ def usb_polling():
 
     echo = b""
     for dev in order:
-        info_status(f"Trying to poll from {dev}...", fg='grey')
+        info_status(f"Trying to poll from {dev}...", fg='grey', type=1)
         root.update()
         try:
             echo = usb_polling_send(dev, pkt, expect_echo=exp_echo)
@@ -359,8 +366,10 @@ def usb_polling():
             if dev == saved:
                 print(f"{info_prefix}{dev} disappeared – clearing saved COM port")
                 port_var.set("")
-                save_config(mode_var.get(), "", bt_mac.get(), time_allow.get())
-                info_status(msg=f"{dev} disappeared – clearing saved COM port.", fg='grey')
+                save_config(mode_var.get(), "", bt_mac.get(), time_allow.get(), poll=True)
+                info_status(msg=f"{dev} disappeared – clearing saved COM port.", fg='grey', type=1)
+                continue
+            return True
         ok = (echo == pkt)
         set_poll_led(ok)
 
@@ -368,13 +377,12 @@ def usb_polling():
             # --- SUCCESS -----------------------------------------------------
             desc = dict(ports).get(dev, "")
             port_var.set(f"{dev}  --  {desc}")
-            info_status(f"Device found on {dev}", fg='green')
+            info_status(f"Device found on {dev}", fg='green', type=1)
             update_status()
-            save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
-            info_status(msg=f"USB link OK! Total time allowed is on {time_allow.get()} minute(s).", fg='green')
+            save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get(), poll=True)
             return True
 
-    info_status("Device cannot be detected on USB ports.", fg='red')
+    info_status("Device cannot be detected on USB ports. Retrying...", fg='grey', type=1)
     set_poll_led(False)
 
 """Parent function that tries to send a packet to a specific port and return echo if received"""
@@ -384,7 +392,7 @@ def usb_polling_send(port_device: str, packet: bytes, expect_echo: int = 0) -> b
     Open one port, write the poll packet, optionally read the echo.
     Any SerialException is allowed to propagate to the caller.
     """
-    usb_socket = serial.Serial(port_device, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=READ_TIMEOUT_USB)
+    usb_socket = serial.Serial(port_device, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=WRITE_TIMEOUT_USB)
     print(f"{info_prefix}{port_device} is trying now")
     with usb_socket as ser:
         n = ser.write(packet)
@@ -424,7 +432,7 @@ def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False) -
             messagebox.showerror("Error", "No USB serial port selected!")
             return b""
         try:
-            usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=READ_TIMEOUT_USB)
+            usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=WRITE_TIMEOUT_USB)
             with usb_socket as ser:
                 n = ser.write(packet)
                 print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
@@ -645,6 +653,7 @@ def polling_watchdog():
         finally:
             _poll_lock.release()
 
+        print(f"{info_prefix}POLL STAT: {ok}")
         if ok:
             _poll_fail_since = None
         else:
@@ -737,13 +746,14 @@ def set_data(new_settings, new_cycles):
         messagebox.showerror("Error", f"Failed to load from {SETTING_FILE}: {e}")
 
 """Save connection configuration to file"""
-def save_config(mode, com_port, bt_mac, time):
+def save_config(mode, com_port, bt_mac, time, poll=False):
     try:
         with open(CONFIG_FILE, 'w') as f:
             f.write(f"USB_COM={com_port}\n")
             f.write(f"BT_MAC={bt_mac}\n")
             f.write(f"MAX_LED_Time={time}\n")
-        info_status(msg=f"Configurations loaded, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
+        if not poll:
+            info_status(msg=f"Configurations loaded, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
     except Exception as e:
         print(f"{error_prefix}Saving config: {e}")
         messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
@@ -785,11 +795,10 @@ def config_window():
     def on_usb_refresh():
         if INIT_SCAN == 1:
             config_win.destroy()
-            usb_polling()
+            info_status(msg=f"USB COM port polling started.", fg='grey')
+            usb_polling_start()
         else: 
             refresh_port_list(port_combo)
-        # start periodic polling from now on
-        root.after(POLL_INTERVAL_MS, polling_watchdog)
 
     def on_cancel():
         config_win.destroy()
@@ -846,15 +855,17 @@ def config_window():
     val_frame.pack(fill='x', padx=20, pady=10)
     
     ttk.Label(val_frame, text="USB COM Port:").grid(row=0, column=0, sticky='w', padx=(0,10))
-    port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
-    port_combo.grid(row=0, column=1, sticky='ew', padx=5)
-    refresh_port_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=on_usb_refresh, bootstyle="secondary-outline") # before: command=lambda: refresh_port_list(port_combo)
-    refresh_port_btn.grid(row=0, column=2, padx=(5, 0))
+    if INIT_SCAN == 0:
+        port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
+        port_combo.grid(row=0, column=1, sticky='ew', padx=5)
+    refresh_port_btn = ttk.Button(val_frame, text=usb_refresh_text, width=3 if INIT_SCAN == 0 else 20, 
+                                  command=on_usb_refresh, bootstyle="secondary-outline" if INIT_SCAN == 0 else "dark-outline") # before: command=lambda: refresh_port_list(port_combo)
+    refresh_port_btn.grid(row=0, column=2 if INIT_SCAN == 0 else 1, padx=(5, 0))
 
     ttk.Label(val_frame, text="Bluetooth Host:").grid(row=1, column=0, sticky='w', padx=(0,10))
     btmac_combo = ttk.Combobox(val_frame, textvariable=bt_mac, width=20)
     btmac_combo.grid(row=1, column=1, sticky='ew', padx=5)
-    refresh_bt_btn = ttk.Button(val_frame, text=refresh_text, width=3, command=lambda: refresh_bt_list(btmac_combo), bootstyle="secondary-outline")
+    refresh_bt_btn = ttk.Button(val_frame, text=bt_refresh_text, width=3, command=lambda: refresh_bt_list(btmac_combo), bootstyle="secondary-outline")
     refresh_bt_btn.grid(row=1, column=2, padx=(5, 0))
 
     # Other selection
@@ -873,6 +884,10 @@ def config_window():
     ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary-outline", width=8).pack(side='right', padx=20)
     ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success-outline", width=8).pack(side='right')
 
+    config_win.update_idletasks()
+    w = config_win.winfo_reqwidth()
+    h = config_win.winfo_reqheight()
+    config_win.geometry(f"{w}x{h}")
     config_win.wait_window(config_win)
     
 # ──────────────── GUI callbacks ─────────────────────────────────────
@@ -999,6 +1014,7 @@ def add_new_row():
     info_status(msg=f"Added colour row {i+1} successfully!", fg='grey')
     print(f"{info_prefix}added row {i+1}, current number of rows: {len(rows)}")
     debug_print_value()
+    #resize_trigger()
 
 """Callback for the delete button on each row"""
 def delete_row_by_ref(row_ref):
@@ -1043,6 +1059,7 @@ def delete_row(i):
     info_status(msg=f"Deleted colour row {i+1} successfully!", fg='grey')
     print(f"{info_prefix}deleted row {i+1}, current number of rows: {len(rows)}")
     debug_print_value()
+    #resize_trigger()
 
 """Callback for the send to ESP32 button"""
 def send_action():
@@ -1120,8 +1137,11 @@ def update_status():
         set_poll_led(None)
 
 """Update the status indicator text"""
-def info_status(msg="Unknown.", fg='grey'):
-    status_indicator.config(text=msg, foreground=fg)
+def info_status(msg="Unknown.", fg='grey', type=0):
+    if type == 0:
+        status_indicator.config(text=msg, foreground=fg)
+    else:
+        poll_status_indicator.config(text=msg, foreground=fg)
 
 def set_poll_led(ok: bool | None):
     if ok is None:
@@ -1134,8 +1154,8 @@ def set_poll_led(ok: bool | None):
 # ──────────────── GUI layout ────────────────────────────────────────
 
 if NEW_LAYOUT == 1: # New layout
-    root.geometry("1200x600")
-    root.resizable(False, False)  # Allow vertical resizing
+    root.geometry("1400x600")
+    root.resizable(True, True)
 
     main = ttk.Frame(root)
     main.pack(side="top", fill=tk.BOTH, expand=True, padx=10, pady=10)
@@ -1167,6 +1187,8 @@ if NEW_LAYOUT == 1: # New layout
     ttk.Spinbox(cycleframe, from_=1, to=100, textvariable=cycles, width=5).pack(side="left", padx=5)
 
     ttk.Button(controls, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).pack(pady=5, anchor="w")
+    if INIT_SCAN == 1:
+        ttk.Button(controls, text=usb_refresh_text, width=buttons_width, bootstyle="secondary-outline", command=usb_polling_start).pack(pady=5, anchor="w")
     ttk.Button(controls, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).pack(pady=5, side="bottom", anchor="w")
     ttk.Button(controls, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).pack(pady=5, side="bottom", anchor="w")
 
@@ -1188,6 +1210,7 @@ if NEW_LAYOUT == 1: # New layout
     # Pack canvas and scrollbar
     canvas.pack(side="left", fill="both", expand=True)
     scrollbar.pack(side="right", fill="y")
+    table.pack_propagate(False)  # Prevent table from shrinking
     
     # Create table inside the scrollable frame
     table = ttk.Frame(scrollable_frame)
@@ -1229,12 +1252,16 @@ else: # Old layout
     ttk.Button(footer, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
     ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
     ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
+    if INIT_SCAN == 1:
+        ttk.Button(footer, text=usb_refresh_text, width=buttons_width, bootstyle="secondary-outline", command=usb_polling_start).grid(row=0, column=10, padx=5, pady=5)
 
 # Create table header
 for col, h in enumerate(headers):
     width = 8 if col == 0 else None
     ttk.Label(table, text=h, width=width).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
     table.grid_columnconfigure(col, weight=1 if col > 0 else 0)  # Don't expand remove column
+for col in range(len(headers)):
+    table.grid_columnconfigure(col, weight=1, uniform="col")
 
 # Status at the bottom
 port_indicator = ttk.Label(status_frame, text="Unknown")
@@ -1249,6 +1276,9 @@ poll_indicator.pack(side="right", padx=(10, 0))
 status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
 status_indicator.pack(side="left")
 
+poll_status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
+poll_status_indicator.pack(side="bottom")
+
 # initialise badge
 set_poll_led(None)
 # ──────────────── GUI window ────────────────────────────────────────
@@ -1257,7 +1287,10 @@ update_total_time()
 load_config()
 update_status()
 
-usb_polling() if INIT_SCAN == 1 else config_window()
+# Post-Initialization tasks
+root.update_idletasks()
+root.minsize(root.winfo_reqwidth(), root.winfo_reqheight())  # Set minimum size to fit content
+usb_polling_start() if INIT_SCAN == 1 else config_window()
 
 def on_closing():
     stop_watchdog()

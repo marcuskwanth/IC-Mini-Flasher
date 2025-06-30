@@ -1,3 +1,9 @@
+Version 250630.2
+- Fixed USB COM not continuously polling after matched saved COM port
+- Fixed configuration window poping up even after correctly polled a USB COM port
+- Added a dedicate button for polling USB COM ports
+- Updated window's geometry to be resizable (still not adjustable automatically)
+
 Version 250630.1
 - Added USB COM port polling functionality, with COM port retrying and write timeout ability
 (In order for the polling to work, please flash the sketch .ino file to the ESP32 from the repo)
