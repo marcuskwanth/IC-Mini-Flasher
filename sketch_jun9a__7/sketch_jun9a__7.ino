@@ -48,6 +48,7 @@ uint16_t pktLen = 0;
 uint16_t pktSum = 0;
 uint16_t pktChk = 0;
 uint8_t  dataType = 0;
+uint8_t DATA_POLL = 0x01;
 
 char     payStr[PAYLOAD_MAX + 1];
 
@@ -102,6 +103,20 @@ void saveLatestLedPkt(const uint8_t *data, uint16_t len)
   nvs.putUInt(KEY_LEN, len);
   nvs.putBytes(KEY_PAY, data, len);
   nvs.end();
+}
+void sendPollAck()
+{
+  uint32_t sum = 0;
+  auto put = [&](uint8_t b){ Serial.write(b); sum += b; };
+
+  put(0x5A);            // sync
+  put(0xA5);
+  put(0x00); put(0x00); // LEN = 0
+  put(DATA_POLL);       // TYPE = 0x01
+
+  uint16_t cs = sum & 0xFFFF;
+  put(uint8_t(cs & 0xFF));   // CS low
+  put(uint8_t(cs >> 8));     // CS high
 }
 
 /* ----------------------------------------------------------------- */
@@ -241,27 +256,34 @@ bool receivePacket()
                  if (b != uint8_t(sum & 0xFF)) { st = S1; break; }
                  st = CS2; break;
 
-      case CS2:
-                  csHi = b;
-                  if (b != uint8_t(sum >> 8)) { st = S1; break; }
+      case CS2:                                 // << whole new body >>
+              csHi = b;
+              if (b != uint8_t(sum >> 8)) { st = S1; break; }
 
-                  rxLen  = len;
-                  pktLen = len + 7;
-                  pktSum = sum;
-                  pktChk = uint16_t(csHi) << 8 | csLo;
+              rxLen  = len;
+              pktLen = len + 7;
+              pktSum = sum;
+              pktChk = uint16_t(csHi) << 8 | csLo;
 
-                  if (dataType == 0x00)           // store LED packets
-                      saveLatestLedPkt(payload, rxLen);
+              /* -----------  NEW BRANCH: POLL-LINK answer  --------------- */
+              if (dataType == DATA_POLL) {            // 0x01
+                  sendPollAck();                      // 7-byte ACK
+                  st = S1;
+                  return false;                       // nothing else to do
+              }
+              /* -----------  existing branches stay unchanged ------------ */
+              if (dataType == 0x00)                   // save LED settings
+                  saveLatestLedPkt(payload, rxLen);
 
-                  if (dataType == 0x02) {         // *** reply packet, NO debug prints ***
-                      sendStoredLedPkt();
-                      st = S1;
-                      return true;
-                  }
-
-                  Serial.println("\nPacket OK.");  // <-- ordinary debug for all other types
+              if (dataType == 0x02) {                 // request-data
+                  sendStoredLedPkt();
                   st = S1;
                   return true;
+              }
+
+              Serial.println("\nPacket OK.");
+              st = S1;
+              return true;
     }
   }
   return false;

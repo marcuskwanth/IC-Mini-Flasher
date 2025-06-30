@@ -1,3 +1,8 @@
+Version 250630.1
+- Added USB COM port polling functionality, with COM port retrying and write timeout ability
+(In order for the polling to work, please flash the sketch .ino file to the ESP32 from the repo)
+- Fixed configuration window not poping up when using standard (non-COM polling) mode
+
 Version 250629.4
 - Minor update on the Save Settings and Load Settings positions
 

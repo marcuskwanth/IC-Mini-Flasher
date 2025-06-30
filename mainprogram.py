@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 250629.3
+IC-Project : Mini-Flasher GUI - build 250630.1
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -15,6 +15,7 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import serial, serial.tools.list_ports, json, subprocess, os, time
+import traceback 
 
 import bluetooth, glob, platform, threading
 """
@@ -30,7 +31,7 @@ root.title("IC-Project  ·  Mini-Flasher GUI")
 cfg_wintitle = "IC-Project  ·  Configurations"
 
 # ──────────────── Global configuration ───────────────────────────────
-INIT_SCAN           = 0                 # 0 = disable USB COM polling functionality, 1 = enable
+INIT_SCAN           = 1                 # 0 = disable USB COM polling functionality, 1 = enable
 NEW_LAYOUT          = 1                 # 0 = with original layout, 1 = new layout with the buttons on LHS
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
@@ -40,8 +41,9 @@ POLLING_ECHO_PKT    = ""                # These 2 not sure if needed, just put t
 REQUEST_ECHO_PKT    = ""
 TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
-READ_TIMEOUT_USB    = 1                 # USB: seconds for optional loop-back read
-READ_TIMEOUT_BT     = 1               # BLUETOOTH: seconds for optional loop-back read
+READ_TIMEOUT_USB    = 2                 # USB: seconds for optional loop-back read
+READ_TIMEOUT_BT     = 2                 # BLUETOOTH: seconds for optional loop-back read
+WRITE_TIMEOUT_USB   = 5
 COOLDOWN            = 10                # Send button cooldown in seconds
 
 # ──────────────── Packet Header configuration ────────────────────────
@@ -49,6 +51,17 @@ HEADER1, HEADER2    = 0x5A, 0xA5
 LED_SETTING         = 0x00              # Type 0: Be used when clicking "Send Data"
 POLL_LINK           = 0x01              # Type 1: Be used when polling the correct USB COM ports one-by-one once the program starts
 READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request Data"
+
+# ──────────────── Poll-watchdog configuration ──────────────────────
+
+POLL_INTERVAL_MS     = 1000          # watchdog tick   (1 s)
+POLL_FAIL_TIMEOUT    = 30            # open config dlg after 30 s consecutive failure
+
+_poll_lock           = threading.Lock()
+_poll_sending        = threading.Event()   # raised while a user-Tx is active
+_poll_fail_since     = None                # time.time() when failure streak started
+_lock_acquired_at    = 0                  # for stale-lock detection
+_watchdog_id         = None               # after() handle so we can stop / restart
 
 # ──────────────── GUI/Console Elements configuration ─────────────────
 device_name         = "ESP32"
@@ -113,7 +126,7 @@ mode_var = tk.IntVar(value=0)    # 0 = USB, 1 = Bluetooth
 """For macOS troubleshooting: List the Bluetooth devices in a macOS serial format"""
 def list_bt_devices():
     print("Available Bluetooth devices in /dev:")
-    print("\n".join(glob.glob("/dev/cu.*") + glob.glob("/dev/tty.*")))
+    print("\n".join(glob.glob("/dev/cu.") + glob.glob("/dev/tty.")))
 
 """Connect to the selected Bluetooth device"""
 def connect_bluetooth():
@@ -252,11 +265,13 @@ def disconnect_bluetooth():
 
 """Send data over Bluetooth connection"""
 def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
-    global bt_connected
+    global bt_connected, _poll_sending 
+    _poll_sending.set()
     if usb_socket:
         disconnect_usb()
     if not bt_connected:
         if not connect_bluetooth():
+            _poll_sending.clear()
             return b""
     try:
         # macOS uses serial connection
@@ -282,6 +297,8 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
         messagebox.showerror("Error", f"Bluetooth failed: {e}") 
         bt_connected = False
         return b""
+    finally:
+        _poll_sending.clear()
 
 # ──────────────── USB Serial utilities ──────────────────────────────
 port_var = tk.StringVar(value="")        # currently selected port
@@ -306,56 +323,77 @@ def refresh_port_list(combo):
 
 """Automatically detect the correct USB port by sending polling packets"""
 def usb_polling():
-    if mode_var.get() != 0:  # Skip if not in USB mode
+    """
+    Scan all available serial ports with a 7-byte poll packet.
+    The port that echoes the packet is accepted as the Mini-Flasher.
+    """
+    if mode_var.get() != 0:            # skip if GUI is in Bluetooth mode
         return
+
     info_status("Detecting device on USB ports...", fg='grey')
     root.update()
+
     ports = available_ports()
     if not ports:
         info_status("No USB ports available", fg='red')
-        return
-    port_dict = {p[0]: p[1] for p in ports}  
-    pkt = build_packet(POLL_LINK, POLLING_PKT) # Type 1
+        set_poll_led(False)
+        return False                 
+
+    pkt      = build_packet(POLL_LINK, POLLING_PKT)   # 0×01, len == 0 → 7 bytes
+    exp_echo = len(pkt)                               # expect exactly 7 bytes
     print(f"{info_prefix}Polling packet: {bar_hex(pkt)}")
-    
-    # Try saved port if available
-    saved_port = port_var.get().split(' ')[0] if port_var.get() else ""
-    ports_to_try = [saved_port] if saved_port and saved_port in port_dict else []
-    
-    # Add other ports not already in the list and try each of them
-    ports_to_try += [p[0] for p in ports if p[0] not in ports_to_try]
-    for port_device in ports_to_try:
-        if not port_device: 
-            continue
-        info_status(f"Trying to connect with {port_device}...", fg='grey')
+
+    # first try the port remembered in config, then the remaining ones
+    saved = port_var.get().split(' ')[0] if port_var.get() else ""
+    order = ([saved] if saved else []) + [p[0] for p in ports if p[0] != saved]
+
+    echo = b""
+    for dev in order:
+        info_status(f"Trying to poll from {dev}...", fg='grey')
         root.update()
-        echo = usb_polling_send(port_device, pkt, len(pkt))
-        print(f"{bar_hex(pkt)} vs {bar_hex(echo)}")
+        try:
+            echo = usb_polling_send(dev, pkt, expect_echo=exp_echo)
+        except serial.SerialException as e:
+            print(f"{error_prefix} Polling failed whilst opening {dev}: {e}")
+            # ---- saved port vanished → forget it immediately ----------
+            if dev == saved:
+                print(f"{info_prefix}{dev} disappeared – clearing saved COM port")
+                port_var.set("")
+                save_config(mode_var.get(), "", bt_mac.get(), time_allow.get())
+                info_status(msg=f"{dev} disappeared – clearing saved COM port.", fg='grey')
+        ok = (echo == pkt)
+        set_poll_led(ok)
+
         if echo == pkt:
-            # Found matching device if the echo packet equals to the original packet!
-            port_str = f"{port_device}  –  {port_dict[port_device]}"
-            port_var.set(port_str)
-            info_status(f"Device found on {port_str}", fg='green')
+            # --- SUCCESS -----------------------------------------------------
+            desc = dict(ports).get(dev, "")
+            port_var.set(f"{dev}  --  {desc}")
+            info_status(f"Device found on {dev}", fg='green')
             update_status()
             save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
-            return
-    info_status(f"No target device detected on USB ports, please check the connection and try again in Configuration menu.", fg='red')
+            info_status(msg=f"USB link OK! Total time allowed is on {time_allow.get()} minute(s).", fg='green')
+            return True
+
+    info_status("Device cannot be detected on USB ports.", fg='red')
+    set_poll_led(False)
 
 """Parent function that tries to send a packet to a specific port and return echo if received"""
-def usb_polling_send(port_device, packet, expect_echo=0) -> bytes:    
-    try:
-        usb_socket = serial.Serial(port_device, BAUDRATE, timeout=READ_TIMEOUT_USB)
-        with usb_socket as ser:
-            n = ser.write(packet)
-            print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port_device}")
-            if expect_echo:
-                echo = ser.read(expect_echo)
-                print(f"PC  echo:  {bar_hex(echo)}")
-                return echo
-    except serial.SerialException as e:
-        print(f"{error_prefix}opening {port_device}: {e}")
-    finally:
-        disconnect_usb()
+# ──────────────── USB helper that propagates errors ───────────────
+def usb_polling_send(port_device: str, packet: bytes, expect_echo: int = 0) -> bytes:
+    """
+    Open one port, write the poll packet, optionally read the echo.
+    Any SerialException is allowed to propagate to the caller.
+    """
+    usb_socket = serial.Serial(port_device, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=READ_TIMEOUT_USB)
+    print(f"{info_prefix}{port_device} is trying now")
+    with usb_socket as ser:
+        n = ser.write(packet)
+        print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port_device}")
+        if expect_echo:
+            echo = ser.read(expect_echo)
+            print(f"PC  echo:  {bar_hex(echo)}")
+            return echo
+    return b""          # (no echo requested)
 
 """Disconnect from USB Port"""
 def disconnect_usb():
@@ -371,37 +409,43 @@ def disconnect_usb():
             usb_socket = None
 
 """Open selected COM port, transmit packet, optionally read echo."""
-def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False)  -> bytes:
+def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False) -> bytes:
     global usb_socket
-    if bt_socket:
-        disconnect_bluetooth()
-    port = port_var.get()
-    if " " in port:                 # ← NEW: take only first token ► "COM4"
-        port = port.split()[0]      
-    if not port:
-        print(f"{error_prefix}No serial port selected.")
-        messagebox.showerror("Error", f"No USB serial port selected!")
+    _poll_sending.set()              # ← mark that we’re in a send operation
     try:
-        usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT_USB)
-        with usb_socket as ser:
-            n = ser.write(packet)
-            print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
+        # If we’re currently connected over BLE, disconnect first
+        if bt_socket:
+            disconnect_bluetooth()
+        port = port_var.get()
+        if " " in port:             # ← NEW: take only first token ► "COM4"
+            port = port.split()[0]
+        if not port:
+            print(f"{error_prefix}No serial port selected.")
+            messagebox.showerror("Error", "No USB serial port selected!")
+            return b""
+        try:
+            usb_socket = serial.Serial(port, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=READ_TIMEOUT_USB)
+            with usb_socket as ser:
+                n = ser.write(packet)
+                print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port}")
+                if read_response:
+                    response = read_one_packet(ser)
+                    print(f"{info_prefix}Reading response: {bar_hex(response)}")
+                    return response
+                if expect_echo:
+                    echo = ser.read(expect_echo)
+                    print(f"PC  echo  {bar_hex(echo)}")
+                    return echo
+                info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!",fg="green")
+                print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
+                return b""
+        except serial.SerialException as e:
+            print(f"{error_prefix}opening {port}: {e}")
+            messagebox.showerror("Error", f"Error whilst opening port {port}!")
+            return b""
 
-            # Below echo part is used when type 2 is used (reading from ESP32)
-            if read_response:
-                response = read_one_packet(ser)  # Read enough bytes for a full response
-                print(f"{info_prefix}Reading response: {bar_hex(response)}")
-                return response
-            # For other packets
-            if expect_echo:
-                echo = ser.read(expect_echo)
-                print(f"PC  echo  {bar_hex(echo)}")
-                return echo
-            info_status(msg=f"Message sent to {device_name} successfully via USB serial {port}!", fg='green')
-            print(f"{info_prefix}Sent {len(packet)} bytes via USB Serial {port}")
-    except serial.SerialException as e:
-        print(f"{error_prefix}opening {port}: {e}")
-        messagebox.showerror("Error", f"Error whilst opening port {port}!") 
+    finally:
+        _poll_sending.clear()        # ← always clear the flag on exit
 
 """Sequence for requesting configuration data from ESP32 device"""
 def request_data_prerequisite():
@@ -558,6 +602,66 @@ def parse_payload(payload: str) -> tuple:
         messagebox.showerror("Error", f"Payload parsing failed: {e}")
         print(f"{error_prefix}Payload parsing failed: {e}")
         return None, None
+    
+def start_watchdog():
+    """arm the watchdog exactly once"""
+    global _watchdog_id
+    if _watchdog_id is None:
+        _watchdog_id = root.after(50, polling_watchdog)
+
+def stop_watchdog():
+    """cancel the periodic after() if it is running"""
+    global _watchdog_id
+    if _watchdog_id is not None:
+        root.after_cancel(_watchdog_id)
+        _watchdog_id = None
+
+def polling_watchdog():
+    print("DEBUG mode =", mode_var.get(),
+      "sending =", _poll_sending.is_set(),
+      "lock =", _poll_lock.locked())
+    """
+    Periodically tries usb_polling().  Extra features:
+      • releases stale locks
+      • keeps track of continuous failures and re-opens the config window
+        after POLL_FAIL_TIMEOUT seconds
+    """
+    global _lock_acquired_at, _poll_fail_since, _watchdog_id
+
+    # ---------- salvage a stuck lock (e.g. PySerial hangs) --------------
+    if _poll_lock.locked() and time.time() - _lock_acquired_at > 5:
+        try:
+            _poll_lock.release()
+            print("WARN watchdog lock was stale – force-released")
+        except RuntimeError:
+            pass
+
+    # ---------- worker that does the actual polling ---------------------
+    def _worker():
+        global _poll_fail_since
+        ok = False
+        try:
+            ok = usb_polling()          # True  ==> device found
+        finally:
+            _poll_lock.release()
+
+        if ok:
+            _poll_fail_since = None
+        else:
+            if _poll_fail_since is None:
+                _poll_fail_since = time.time()
+            elif time.time() - _poll_fail_since >= POLL_FAIL_TIMEOUT:
+                _poll_fail_since = None          # pop dlg only once
+                root.after(0, config_window)
+
+    # ---------- schedule worker if allowed ------------------------------
+    if mode_var.get() == 0 and not _poll_sending.is_set():
+        if _poll_lock.acquire(blocking=False):
+            _lock_acquired_at = time.time()
+            threading.Thread(target=_worker, daemon=True).start()
+
+    _watchdog_id = root.after(POLL_INTERVAL_MS, polling_watchdog)
+
 
 # ──────────────── GUI File I/O ──────────────────────────────────────
 """Save current settings to file"""
@@ -639,7 +743,7 @@ def save_config(mode, com_port, bt_mac, time):
             f.write(f"USB_COM={com_port}\n")
             f.write(f"BT_MAC={bt_mac}\n")
             f.write(f"MAX_LED_Time={time}\n")
-        info_status(msg=f"Configurations saved, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
+        info_status(msg=f"Configurations loaded, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
     except Exception as e:
         print(f"{error_prefix}Saving config: {e}")
         messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
@@ -684,6 +788,8 @@ def config_window():
             usb_polling()
         else: 
             refresh_port_list(port_combo)
+        # start periodic polling from now on
+        root.after(POLL_INTERVAL_MS, polling_watchdog)
 
     def on_cancel():
         config_win.destroy()
@@ -691,6 +797,7 @@ def config_window():
     def on_save():
         save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
         update_status()
+        start_watchdog()
         config_win.destroy()
 
     # HELP FUNCTION: Shows instructions for finding ports/devices
@@ -1009,10 +1116,21 @@ def update_status():
     port = port_var.get()
     host = bt_mac.get()
     port_indicator.config(text=f"{port_indicator_text} {port if mode_var.get() == 0 else host}")
+    if mode_var.get() == 1:
+        set_poll_led(None)
 
 """Update the status indicator text"""
 def info_status(msg="Unknown.", fg='grey'):
     status_indicator.config(text=msg, foreground=fg)
+
+def set_poll_led(ok: bool | None):
+    if ok is None:
+        poll_indicator.config(text="POLL ?", bootstyle="secondary")
+    elif ok:
+        poll_indicator.config(text="POLL OK", bootstyle="success")
+    else:
+        poll_indicator.config(text="POLL FAIL", bootstyle="danger")
+
 # ──────────────── GUI layout ────────────────────────────────────────
 
 if NEW_LAYOUT == 1: # New layout
@@ -1123,17 +1241,26 @@ port_indicator = ttk.Label(status_frame, text="Unknown")
 port_indicator.pack(side="right")
 mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
 mode_indicator.pack(side="right", padx=(20, 10))
+
+# NEW badge showing poll result
+poll_indicator = ttk.Label(status_frame, text="POLL ?", bootstyle="secondary")
+poll_indicator.pack(side="right", padx=(10, 0))
+
 status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
 status_indicator.pack(side="left")
 
+# initialise badge
+set_poll_led(None)
 # ──────────────── GUI window ────────────────────────────────────────
 add_new_row()  # first empty row
 update_total_time()
 load_config()
 update_status()
-root.after(50, usb_polling if INIT_SCAN == 1 else config_window)
+
+usb_polling() if INIT_SCAN == 1 else config_window()
 
 def on_closing():
+    stop_watchdog()
     print(f"{info_prefix}Closing app")
     disconnect_bluetooth()
     disconnect_usb()
