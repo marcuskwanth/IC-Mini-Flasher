@@ -1,3 +1,6 @@
+Version 250712.2
+- Added pyInstaller to build exe / app
+
 Version 250712.1
 - Bug fix: Not stating poll fail if ESP32 device disconnects
 - Added newest code for ESP32 packet receiving 

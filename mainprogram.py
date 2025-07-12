@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 250712.1
+IC-Project : Mini-Flasher GUI - Version 250712.2
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 

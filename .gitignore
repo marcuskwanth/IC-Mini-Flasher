@@ -1,3 +1,7 @@
-old repo/mainprogram0610.py
+old repo/
+build/
+dist/
+lightblue-0.4/
+pybluez/
 config.txt
 settings.txt
