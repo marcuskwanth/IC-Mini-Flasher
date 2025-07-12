@@ -1,3 +1,6 @@
+Version 250712.3
+- Temporary fix for macOS can't read / write files when it is executed in app
+
 Version 250712.2
 - Added pyInstaller to build exe / app
 

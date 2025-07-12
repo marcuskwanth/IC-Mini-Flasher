@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - Version 250712.2
+IC-Project : Mini-Flasher GUI - Version 250712.3
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -756,7 +756,9 @@ def save_config(mode, com_port, bt_mac, time, poll=False):
             info_status(msg=f"Configurations loaded, now using {'USB' if mode == 0 else 'Bluetooth'}. Total time allowed set to {time_allow.get()} minute(s).", fg='grey')
     except Exception as e:
         print(f"{error_prefix}Saving config: {e}")
-        messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
+        if platform.system() != "Darwin":
+            messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
+        info_status(msg=f"{attention_prefix}{e}", fg='red')
 
 """Load connection configuration from file or return defaults"""
 def load_config():
