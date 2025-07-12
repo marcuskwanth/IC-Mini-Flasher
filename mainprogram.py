@@ -15,7 +15,6 @@ from tkinter import messagebox
 import ttkbootstrap as ttk
 from ttkbootstrap.constants import *
 import serial, serial.tools.list_ports, json, subprocess, os, time
-import traceback 
 
 import bluetooth, glob, platform, threading
 """
