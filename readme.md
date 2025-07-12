@@ -1,3 +1,7 @@
+Version 250712.1
+- Bug fix: Not stating poll fail if ESP32 device disconnects
+- Added newest code for ESP32 packet receiving 
+
 Version 250630.3
 - Update the polling time interval.
 

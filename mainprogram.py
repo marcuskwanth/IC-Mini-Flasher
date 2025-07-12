@@ -1,5 +1,5 @@
 """
-IC-Project : Mini-Flasher GUI - build 250630.3
+IC-Project : Mini-Flasher GUI - build 250712.1
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
@@ -362,6 +362,7 @@ def usb_polling():
             echo = usb_polling_send(dev, pkt, expect_echo=exp_echo)
         except serial.SerialException as e:
             print(f"{error_prefix} Polling failed whilst opening {dev}: {e}")
+            set_poll_led(False)
             # ---- saved port vanished → forget it immediately ----------
             if dev == saved:
                 print(f"{info_prefix}{dev} disappeared – clearing saved COM port")
