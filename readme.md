@@ -1,3 +1,6 @@
+Version 250713.2
+- Updated ESP32 firmware that the LEDs will flash immediately after receiving type 0 packet
+
 Version 250713.1
 - Integrated complete ESP32 program (Button + Bluetooth + LED Packeting + Sleep)
 

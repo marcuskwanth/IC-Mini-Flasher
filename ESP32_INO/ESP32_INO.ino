@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250713.1
+Mini Flasher ESP32 Program - Version 250713.2
 Updated 2025-07-13
 */
 
@@ -349,6 +349,7 @@ bool receivePacket() {
             stopSequence();
             mini_flashing = false;
           }
+          startSequence();
         }
 
         if (dataType == 0x02) {
