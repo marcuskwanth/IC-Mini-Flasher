@@ -32,7 +32,7 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=['icon.icns'],
+    icon=['icon.ico'],
 )
 coll = COLLECT(
     exe,
@@ -42,10 +42,4 @@ coll = COLLECT(
     upx=True,
     upx_exclude=[],
     name='mainprogram',
-)
-app = BUNDLE(
-    coll,
-    name='mainprogram.app',
-    icon='icon.icns',
-    bundle_identifier=None,
 )

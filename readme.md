@@ -1,3 +1,6 @@
+Version 250713.1
+- Integrated complete ESP32 program (Button + Bluetooth + LED Packeting + Sleep)
+
 Version 250712.3
 - Temporary fix for macOS can't read / write files when it is executed in app
 
