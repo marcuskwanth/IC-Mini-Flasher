@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250713.2
+Mini Flasher ESP32 Program - Version 250715.1
 Updated 2025-07-13
 */
 
@@ -31,11 +31,17 @@ constexpr uint8_t LCD_ROWS = 2;
 #define LED_STA 13
 
 #define RED_PIN 25
-#define GRN_PIN 14
-#define BLUE_PIN 12
-#define YEL_PIN 26   // ‘I’ in the CSV
+#define GRN_PIN 26
+#define BLUE_PIN 18
+#define YEL_PIN 14   // ‘I’ in the CSV
 #define LOW_BATT 39  // Low battery ADC GPIO pin (FIXED CONFLICT)
-#define MFB_KEY 4    // Need to set to input+internal_pullup, active = LOW
+
+#define POW_KEY 4    // Used as power on/off the device
+#define MFB_KEY 17   // Need to set to input+internal_pullup, active = LOW
+
+#define OUTPUT_HIGH 19 // Set output to high to a pin when the a LED color is lit
+
+#define LED_ACTIVE_LOW 1
 
 constexpr uint8_t PWM_CH_RED = 0;
 constexpr uint8_t PWM_CH_GRN = 1;
@@ -163,6 +169,13 @@ uint32_t readADC_Cal(int ADC_Raw);  // Battery-related
 // ====================================================================
 // FUNCTIONS
 // ====================================================================
+// Check if any LED is ON (PWM duty < 255)
+void updateOutputHighPin() {
+  bool anyOn = (ledcRead(PWM_CH_RED) < 255) || (ledcRead(PWM_CH_GRN) < 255) || (ledcRead(PWM_CH_BLU) < 255) || (ledcRead(PWM_CH_YEL) < 255);
+  digitalWrite(OUTPUT_HIGH, anyOn ? HIGH : LOW);
+  delay(200);
+  digitalWrite(OUTPUT_HIGH, LOW);
+}
 // Function to blink the LED briefly when the button is released in handleMFB()
 void blinkLED() {
   digitalWrite(LED_STA, LOW);
@@ -178,22 +191,29 @@ void updateLEDs() {
   digitalWrite(LED_USB, mode == 1 ? LOW : HIGH);  // Green on for USB
   digitalWrite(LED_BLE, mode == 0 ? LOW : HIGH);  // Blue on for BT
 }
-void setAllLeds(uint8_t val)  // COMMON-ANODE → invert
-{
-  uint8_t lvl = val;
+static inline uint8_t mapLevel(uint8_t levelRaw) {
+  if (LED_ACTIVE_LOW) return 255 - levelRaw;
+  else return levelRaw;
+}
+void setAllLeds(uint8_t val) {  // COMMON-ANODE → invert
+  uint8_t lvl = mapLevel(val);
   ledcWrite(PWM_CH_RED, lvl);
   ledcWrite(PWM_CH_GRN, lvl);
   ledcWrite(PWM_CH_BLU, lvl);
   ledcWrite(PWM_CH_YEL, lvl);
+  delay(5);
+  updateOutputHighPin();
 }
 void setColour(char c, uint8_t val) {
-  uint8_t lvl = val;
+  uint8_t lvl = mapLevel(val);
   switch (c) {
     case 'R': ledcWrite(PWM_CH_RED, lvl); break;
     case 'G': ledcWrite(PWM_CH_GRN, lvl); break;
     case 'B': ledcWrite(PWM_CH_BLU, lvl); break;
     case 'I': ledcWrite(PWM_CH_YEL, lvl); break;
   }
+  delay(5);
+  updateOutputHighPin();
 }
 // LED-Sequence Related
 bool parseLedSequence(const uint8_t *buf, uint16_t len) {
@@ -641,9 +661,11 @@ void setup() {
   pinMode(LED_USB, OUTPUT);
   pinMode(LED_BLE, OUTPUT);
   pinMode(LED_STA, OUTPUT);
+  pinMode(OUTPUT_HIGH, OUTPUT);
+  digitalWrite(OUTPUT_HIGH, LOW);
   offLED();  // Turn all LEDs off
 
-  // PWM LED Setup (ADDED)
+  // PWM LED Setup
   ledcSetup(PWM_CH_RED, PWM_FREQ, PWM_BITS);
   ledcSetup(PWM_CH_GRN, PWM_FREQ, PWM_BITS);
   ledcSetup(PWM_CH_BLU, PWM_FREQ, PWM_BITS);

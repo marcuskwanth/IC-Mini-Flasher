@@ -1,3 +1,6 @@
+Version 250715.1
+- Updated the intensity values in the program to invert them to fit into the new color LEDs
+
 Version 250713.2
 - Updated ESP32 firmware that the LEDs will flash immediately after receiving type 0 packet
 
