@@ -753,11 +753,13 @@ void loop() {
   }
 
   /* 2. LCD page rotation (debugging)*/
+  /*
   if (pktLen && (int32_t)(millis() - nextTurn) >= 0) {
     pageIndex = (pageIndex + 1) % pageCnt;
     showPage(pageIndex);
     nextTurn += PAGE_TIME_MS;
   }
+  */
 
   /* 3. Sequencer state machine (ADDED) */
   if (seqEnabled && (int32_t)(millis() - nextEvent) >= 0) {
@@ -809,7 +811,6 @@ void loop() {
     if (mode == 0) {
       if (!SerialBT.hasClient()) {
         stopSequence();
-        mini_flashing = false;
         bt_waitingconnect = true;
       }
     }
