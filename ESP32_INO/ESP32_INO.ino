@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250715.1
+Mini Flasher ESP32 Program - Version 250716.1
 Updated 2025-07-13
 */
 
@@ -17,7 +17,7 @@ Updated 2025-07-13
 // ====================================================================
 // DEFINITIONS
 // ====================================================================
-// LED and LCD Pin Definition (usually GPIO 2 for the built-in LED)
+// LCD Pin and Information Definition
 #define I2C_SDA 21
 #define I2C_SCL 22
 #define LCD_ADDR 0x27
@@ -25,7 +25,7 @@ Updated 2025-07-13
 constexpr uint8_t LCD_COLS = 16;
 constexpr uint8_t LCD_ROWS = 2;
 
-// GPIO + LED PWM Definition
+// GPIO + LED PWM Definition (change if necessary for your pins)
 #define LED_USB 27
 #define LED_BLE 2
 #define LED_STA 13
@@ -33,8 +33,8 @@ constexpr uint8_t LCD_ROWS = 2;
 #define RED_PIN 25
 #define GRN_PIN 26
 #define BLUE_PIN 18
-#define YEL_PIN 14   // ‘I’ in the CSV
-#define LOW_BATT 39  // Low battery ADC GPIO pin (FIXED CONFLICT)
+#define YEL_PIN 14   // ‘I’ in the CSV packet
+#define LOW_BATT 39  // Battery Voltage ADC GPIO pin
 
 #define POW_KEY 4    // Used as power on/off the device
 #define MFB_KEY 17   // Need to set to input+internal_pullup, active = LOW
@@ -51,9 +51,8 @@ constexpr uint32_t PWM_FREQ = 5000;
 constexpr uint8_t PWM_BITS = 8;  // intensity 0-255
 
 // Timing Constants Definition
-#define VERY_LONG_PRESS_TIME 3000  // Very Long press duration in milliseconds
-#define LONG_PRESS_TIME 2000       // Long press duration in milliseconds
-#define SHORT_PRESS_TIME 200       // Short press duration in milliseconds
+#define LONG_PRESS_TIME 2000     // Long press duration in milliseconds
+#define SHORT_PRESS_TIME 200     // Short press duration in milliseconds
 
 // Payload packet limits
 constexpr uint16_t PAYLOAD_MAX = 1002;
@@ -83,7 +82,9 @@ uint16_t pktLen = 0;
 uint16_t pktSum = 0;
 uint16_t pktChk = 0;
 uint8_t dataType = 0;
+uint8_t COLOR_SEQ = 0x00;
 uint8_t DATA_POLL = 0x01;
+uint8_t DATA_REQU = 0x02;
 char payStr[PAYLOAD_MAX + 1];
 struct Page {
   char l1[LCD_COLS + 1];
@@ -123,9 +124,9 @@ uint32_t bootUnlockAt = 0;    // timestamp when it drops
 int mode = 1;  // 0 = BT, 1 = USB
 bool is_powered_on = false;
 bool mini_flashing = false;
-bool bt_waitingconnect = false;              // Bluetooth have initializated but waiting for connection.
-bool just_switched_from_btp_to_usb = false;  // Very important!
-unsigned long Count100ms = 0;                // 100ms counter from 0.
+bool bt_waitingconnect = false;               // Bluetooth have initializated but waiting for connection.
+bool just_powered_on = false;                 // Very important!
+unsigned long Count100ms = 0;                 // 100ms counter from 0.
 
 // ====================================================================
 // FORWARD DECLARATIONS
@@ -152,6 +153,7 @@ void startSequence();
 void stopSequence();
 
 // Button Handling
+void handlePOW();
 void handleMFB();
 bool detectLongPress();
 
@@ -326,6 +328,7 @@ bool receivePacket() {
   static uint8_t csLo = 0, csHi = 0;
 
   while (Serial.available() || SerialBT.available()) {
+    offLED(); delay(5); updateLEDs();
     uint8_t b = mode == 1 ? Serial.read() : SerialBT.read();
     switch (st) {
       case S1:
@@ -350,37 +353,37 @@ bool receivePacket() {
       case CS2:
         csHi = b; if (b != uint8_t(sum >> 8)) { st = S1; break; }
 
-        rxLen = len;
-        pktLen = len + 7;
-        pktSum = sum;
-        pktChk = uint16_t(csHi) << 8 | csLo;
+      rxLen = len;
+      pktLen = len + 7;
+      pktSum = sum;
+      pktChk = uint16_t(csHi) << 8 | csLo;
 
-        if (dataType == DATA_POLL) {  // 0x01
-          sendPollAck();
-          st = S1;
-          return false;
+      if (dataType == DATA_POLL) {  // 0x01
+        sendPollAck();
+        st = S1;
+        return false;
+      }
+
+      if (dataType == COLOR_SEQ) {
+        saveLatestLedPkt(payload, rxLen);
+        parseLedSequence(payload, rxLen);
+        if (seqEnabled) {
+          stopSequence();
+          mini_flashing = false;
         }
+        startSequence();
+        mini_flashing = true;
+      }
 
-        if (dataType == 0x00) {
-          saveLatestLedPkt(payload, rxLen);
-          // Parse and stop sequencer if running
-          parseLedSequence(payload, rxLen);
-          if (seqEnabled) {
-            stopSequence();
-            mini_flashing = false;
-          }
-          startSequence();
-        }
-
-        if (dataType == 0x02) {
-          sendStoredLedPkt();
-          st = S1;
-          return true;
-        }
-
-        Serial.println("\nPacket OK.");
+      if (dataType == DATA_REQU) {
+        sendStoredLedPkt();
         st = S1;
         return true;
+      }
+
+      Serial.println("\nPacket OK.");
+      st = S1;
+      return true;
     }
   }
   return false;
@@ -408,11 +411,15 @@ static void appendGroup(char *dst, char *&tok) {
 }
 // Format all pages
 void buildPages() {
-  snprintf(pages[0].l1, LCD_COLS + 1, "Hdr:%04X Len:%u", 0x5AA5, rxLen);
-  snprintf(pages[0].l2, LCD_COLS + 1, "T:%02X", dataType);
+  if (dataType == COLOR_SEQ) snprintf(pages[0].l1, LCD_COLS + 1, "Received Seq.");
+  else if (dataType == DATA_REQU) snprintf(pages[0].l1, LCD_COLS + 1, "Requesting Data");
+
+  // Uncomment the following 2 codes for debug in the LCD
+  // snprintf(pages[0].l1, LCD_COLS + 1, "Hdr:%04X Len:%u", 0x5AA5, rxLen);
+  // snprintf(pages[0].l2, LCD_COLS + 1, "T:%02X", dataType);
 
   pageCnt = 1;
-  if (dataType != 0x00) return;
+  if (dataType != COLOR_SEQ) return;
 
   memcpy(payStr, payload, rxLen);
   payStr[rxLen] = '\0';
@@ -440,10 +447,41 @@ void showPage(uint8_t idx) {
 }
 
 // ====================================================================
+// Power on/off button
+void handlePOW() {
+  if (bootInputLocked) return;  // lock-out active? Ignore everything
+  static unsigned long lastPressStart = millis();
+  static bool isPressed = false;
+  static bool longPressHandled = false;  // Track if long press was handled
+
+  // Button pressed (active LOW)
+  if (digitalRead(POW_KEY) == LOW) {
+    if (!isPressed) {
+      // New press detected
+      lastPressStart = millis();
+      isPressed = true;
+      longPressHandled = false;  // Reset flag for new press
+    }
+    unsigned long pressDuration = millis() - lastPressStart;
+
+    // CASE 3: Long press handling (> 2000ms)
+    if (!just_powered_on) {
+      if (pressDuration > LONG_PRESS_TIME && !longPressHandled) {
+        Serial.println("*Very Long Press detected...");
+        just_powered_on = false;
+
+        // Implement power off logic here
+        Serial.println("Powering off...");
+        enterDeepSleep();
+      }
+    }
+  }
+  else {
+    if (isPressed) { isPressed = false; just_powered_on = false; }
+  }
+}
 // Handle MFB actions based on press duration after startup
 void handleMFB() {
-  if (bootInputLocked) return;  // lock-out active? Ignore everything
-
   static unsigned long lastPressStart = millis();
   static bool isPressed = false;
   static bool longPressHandled = false;  // Track if long press was handled
@@ -458,35 +496,19 @@ void handleMFB() {
     }
     unsigned long pressDuration = millis() - lastPressStart;
 
-    // CASE 2: Long press handling (2000ms-3000ms)
-    if (pressDuration >= LONG_PRESS_TIME && pressDuration <= VERY_LONG_PRESS_TIME && !longPressHandled) {
+    // CASE 2: Long press handling (>2000ms)
+    if (pressDuration > LONG_PRESS_TIME && !longPressHandled) {
       Serial.println("*Long Press detected...");
-      blinkLED();
-
-      if (!just_switched_from_btp_to_usb) {
-        if (mode == 1) {  // USB mode
-          toggleBluetoothConnection();
-          Serial.println("USB -> Bluetooth");
-        } else {  // Bluetooth mode
-          toggleBluetoothConnection();
-          Serial.println("Bluetooth -> USB");
-        }
-      } else {
-        delay(500);
-        just_switched_from_btp_to_usb = false;
-      }
-    }
-    // CASE 3: Very long press handling (> 3 seconds)
-    else if (pressDuration > VERY_LONG_PRESS_TIME && !longPressHandled) {
-      Serial.println("*Very Long Press detected...");
-      blinkLED();
-      just_switched_from_btp_to_usb = false;
       longPressHandled = true;  // Mark handled
 
-      // Implement power off logic here
-      Serial.println("Powering off...");
-      delay(100);  // Debounce
-      enterDeepSleep();
+      if (mode == 1) {  // USB mode
+        toggleBluetoothConnection();
+        Serial.println("USB -> Bluetooth");
+      } 
+      else {  // Bluetooth mode
+        toggleBluetoothConnection();
+        Serial.println("Bluetooth -> USB");
+      }
     }
   }
   // Button released
@@ -495,14 +517,9 @@ void handleMFB() {
       isPressed = false;  // Reset pressed state
       unsigned long pressDuration = millis() - lastPressStart;
 
-      // Simply mark handling true for long press if button is released
-      if (pressDuration >= LONG_PRESS_TIME && pressDuration <= VERY_LONG_PRESS_TIME && !longPressHandled) {
-        longPressHandled = true;  // Mark handled
-      }
-
       // CASE 1: Short press handling (200ms-2000ms)
       if (pressDuration > SHORT_PRESS_TIME && pressDuration < LONG_PRESS_TIME && !bt_waitingconnect) {
-        Serial.println("*Short Press detected (USB mode)...");
+        Serial.println("*Short Press detected...");
         blinkLED();
         mini_flashing = !mini_flashing;
         if (mini_flashing) {
@@ -516,20 +533,6 @@ void handleMFB() {
       }
     }
   }
-}
-// Function to detect long press on MFB_KEY during startup and BT Pairing mode
-bool detectLongPress() {
-  unsigned long pressStartTime = millis();
-
-  while (digitalRead(MFB_KEY) == LOW) {  // While button is pressed down
-    if (millis() - pressStartTime >= LONG_PRESS_TIME) {
-      Serial.println("Long press in detectionLongPress()");
-      return true;  // Long press detected
-    }
-    delay(10);  // Small delay to debounce button
-  }
-
-  return false;  // No long press detected
 }
 
 // ====================================================================
@@ -566,15 +569,28 @@ void initializeBluetooth() {
 }
 // Function to toggle Bluetooth connection on/off based on button press
 void toggleBluetoothConnection() {
+  // Checking serial before doing anything else
+  if (mode == 1) { 
+    Serial.flush();
+    Serial.end();
+  }
+  else {
+    SerialBT.end();
+    Serial.begin(115200);
+    delay(50);
+  }
+
+  // Performing actual toggling
   if (mode == 1) {
     if (!bt_waitingconnect) {  // if BT is not connected and waiting for connection, exit with no action.
+      mode = 0;
       initializeBluetooth();
       bt_waitingconnect = true;
       Serial.println("BT is turned ON.");
     }
-  } else {  // mode == 0
+  } 
+  else {  // mode == 0
     mode = 1;
-    SerialBT.end();
     bt_waitingconnect = false;
     digitalWrite(LED_BLE, HIGH);  // Turn off Blue LED.
     Serial.println("BT is turned OFF.");
@@ -596,13 +612,13 @@ void enterDeepSleep() {
 
   // Wait for key release
   while (digitalRead(MFB_KEY) == LOW)  // key still held ?
-    delay(10);                         // simple debounce
+    delay(10);
 
   // Lock-out interval
-  const uint32_t LOCK_MS = 5000;  // 1.5 s
+  const uint32_t LOCK_MS = 2000;
   uint32_t t0 = millis();
   while (millis() - t0 < LOCK_MS)
-    delay(10);  // do nothing
+    delay(10);
 
   // Arm the wake-up source and sleep
   esp_sleep_enable_ext0_wakeup((gpio_num_t)MFB_KEY, 0);  // active-LOW
@@ -648,12 +664,25 @@ uint32_t readADC_Cal(int ADC_Raw) {
 void setup() {
   // ESP Sleep
   esp_sleep_pd_config(ESP_PD_DOMAIN_RTC_PERIPH, ESP_PD_OPTION_ON);
-  esp_sleep_enable_ext0_wakeup((gpio_num_t)MFB_KEY, 0);                   // Config wake-up source
-  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();  // Handle wake scenarios
+  esp_sleep_enable_ext0_wakeup((gpio_num_t)POW_KEY, 0);                   // Config wake-up source
+  esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
-  // Start Serial monitor for debugging via USB
+  pinMode(POW_KEY, INPUT);   // POW_KEY is active LOW
+  // "Fake" Power on to check if the power button is pressed for 2 seconds
+  if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
+    unsigned long wakeTime = millis();
+    while (digitalRead(POW_KEY) == LOW) {
+      if (millis() - wakeTime >= LONG_PRESS_TIME) break;
+      delay(10);
+    }
+    if (millis() - wakeTime < LONG_PRESS_TIME) {
+      esp_deep_sleep_start();  // Back to sleep
+    }
+  }
+
+  // Startup after checking power button
   Serial.begin(115200);
-  delay(100);
+  delay(50);
 
   // Pins init
   pinMode(MFB_KEY, INPUT);   // MFB_KEY is active LOW
@@ -685,20 +714,16 @@ void setup() {
   // If wake from sleep
   if (wakeup_reason == ESP_SLEEP_WAKEUP_EXT0) {
     Serial.println("Woke from deep sleep");
-    delay(500);
-    lcd.print("Waked Up");
+    //lcd.print("Waked Up");
+    if (digitalRead(POW_KEY) == LOW) just_powered_on = true;
   }
   // If normal boot
   else {
     Serial.println("Woke from Normal boot");
-    delay(500);
-    lcd.print("Booted Up");
+    //lcd.print("Booted Up");
   }
-
-  // Arm the boot lock-out timer
   bootInputLocked = true;
-  bootUnlockAt = millis() + BOOT_LOCK_MS;
-
+  bootUnlockAt = millis() + BOOT_LOCK_MS; // Arm the boot lock-out timer
   mytimer.start();  // Start the timer
 }
 
@@ -716,17 +741,18 @@ void loop() {
     pageIndex = 0;
     showPage(pageIndex);
     nextTurn = millis() + PAGE_TIME_MS;
-
-    if (dataType == 0x00)  // new LED sequence arrived
+    if (dataType == COLOR_SEQ)  // new LED sequence arrived
       parseLedSequence(payload, rxLen);
   }
 
-  /* 2. LCD page rotation */
+  /* 2. LCD page rotation (debugging)*/
+  /*
   if (pktLen && (int32_t)(millis() - nextTurn) >= 0) {
     pageIndex = (pageIndex + 1) % pageCnt;
     showPage(pageIndex);
     nextTurn += PAGE_TIME_MS;
   }
+  */
 
   /* 3. Sequencer state machine (ADDED) */
   if (seqEnabled && (int32_t)(millis() - nextEvent) >= 0) {
@@ -734,7 +760,8 @@ void loop() {
       setAllLeds(0);  // enter OFF phase
       inOnTime = false;
       nextEvent += steps[curStep].offMs;
-    } else {
+    } 
+    else {
       /* move to next step */
       inOnTime = true;
       curStep++;
@@ -757,44 +784,40 @@ void loop() {
     }
   }
 
-  /* 4. Timer interrupt for battery logging, BT/USB detection */
+  /* 4. Timer interrupt for battery logging, button presses, BT/USB detection */
   if (mytimer.repeat()) {
 
     // Battery logger
     int rawValue = analogRead(LOW_BATT);
     float voltage = float(readADC_Cal(rawValue)) / 1000 * 2;
     float voltage_old = (float)rawValue / 4095 * 2 * 3.8;
-    lcd.setCursor(12, 1);
-    lcd.print(voltage);
+    lcd.setCursor(0, 1);
+    lcd.print("Voltage: "); lcd.print(voltage);
 
-    // Check MFB state and perform actions accordingly after powering on!!
+    // Check MFB and POW state and perform actions accordingly after powering on!!
     handleMFB();
+    handlePOW();
 
     // Check if Bluetooth is connected
     if (mode == 0) {
       if (!SerialBT.hasClient()) {
+        stopSequence();
+        mini_flashing = false;
         bt_waitingconnect = true;
-        mode = 1;
       }
     }
 
     // What if Bluetooth not connected?
-    else {                      // if bt_connected=false only, BLUE LED = off.
-      if (bt_waitingconnect) {  // if bt_connected=false and BT wait for connect, toggle BLUE LED.
-        digitalWrite(LED_USB, HIGH);
-        digitalWrite(LED_STA, HIGH);
-        if (Count100ms % 10 == 0) {                         //every 1000ms.
-          digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);  // Blink Blue LED when not connected (slow blink)
-        }
-        if (detectLongPress()) {
-          Serial.println("Long press detected, switch using USB Mode!");
-          offLED();
-          mode = 1;
-          bt_waitingconnect = false;
-          just_switched_from_btp_to_usb = true;
-          updateLEDs();
-        }
+    if (bt_waitingconnect) {  // if bt_connected=false and BT wait for connect, toggle BLUE LED.
+      digitalWrite(LED_USB, HIGH);
+      digitalWrite(LED_STA, HIGH);
+      if (Count100ms % 3 == 0) {
+        digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);  // Blink Blue LED when not connected (slow blink)
       }
+    }
+    else {
+      offLED();
+      updateLEDs();
     }
 
     // Check if Bluetooth is reconnected
@@ -812,20 +835,21 @@ void loop() {
     if (voltage <= 3.5) {  // LOW_BATT is active low.
       digitalWrite(LED_USB, HIGH);
       digitalWrite(LED_BLE, HIGH);
-      if (Count100ms % 10 == 0) {                         //every 1000ms.
+      if (Count100ms % 10 == 0) {
         digitalWrite(LED_STA, digitalRead(LED_STA) ^ 1);  // Blink RED LED when LOW_BATT = 0.
       }
-    } else {
+    } 
+    else {
       if (!bt_waitingconnect) {
         digitalWrite(LED_STA, HIGH);
         updateLEDs();
       }
     }
 
-    // Increment 100ms counter.
-    Count100ms++;             // Increment 100ms counter.
-    if (Count100ms == 100) {  //count 10 sec. Prepare for 400ms on/off.
-      Count100ms = 0;         //reset the 100ms counter. From 0 to 99.
+    // Increment counter
+    Count100ms++;
+    if (Count100ms == 100) {
+      Count100ms = 0;
     }
   }
 }
@@ -833,6 +857,19 @@ void loop() {
 /* ----------------------------------------------------------------- */
 /* UNUSED FUNCTION */
 /* ----------------------------------------------------------------- */
+// Function to detect long press on MFB_KEY during startup and BT Pairing mode
+bool detectLongPress() {
+  unsigned long pressStartTime = millis();
+
+  while (digitalRead(MFB_KEY) == LOW) {  // While button is pressed down
+    if (millis() - pressStartTime >= LONG_PRESS_TIME) {
+      Serial.println("Long press in detectionLongPress()");
+      return true;  // Long press detected
+    }
+  }
+
+  return false;  // No long press detected
+}
 // Initialization after booting up / waking up
 void initialize() {
   // POWERED OFF CASE 1: Keep pressing on for 2 seconds for BT
@@ -852,7 +889,6 @@ void initialize() {
       }
 
       Count100ms++;  // Increment 100ms counter.
-      delay(100);
       if (Count100ms == 100) {  //count 10 sec. Prepare for 400ms on/off.
         Count100ms = 0;         //reset the 100ms counter. From 0 to 99.
       }

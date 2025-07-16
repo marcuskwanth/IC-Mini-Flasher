@@ -1,3 +1,12 @@
+Version 250716.1
+- Added two-button logic (Power button + Multi-function button)
+- Added a tiny flash to the ESP32 indicator light whenever receiving a packet, including USB polling
+- Fixed ESP32 freezes when receiving packet whilst in Bluetooth (pairing) mode
+- The mini-flasher will stop when ESP32 switched into Bluetooth pairing mode
+- FIxed mini-flasher will not turn off when clicking the MFB right after receiving type 0 packet
+- Updated ESP32 LCD Display status
+- Added a 2 second delay for powering on the ESP32 from deep sleep (off)
+
 Version 250715.1
 - Updated the intensity values in the program to invert them to fit into the new color LEDs
 
