@@ -540,12 +540,12 @@ void blinkLED() {
   digitalWrite(LED_STA, HIGH);
 }
 void offLED() {
-  digitalWrite(LED_USB, HIGH);
+  digitalWrite(LED_FLA, HIGH);
   digitalWrite(LED_BLE, HIGH);
   digitalWrite(LED_STA, HIGH);
 }
 void updateLEDs() {
-  digitalWrite(LED_USB, mode == 1 ? LOW : HIGH);  // Green on for USB
+  digitalWrite(LED_FLA, mode == 1 ? LOW : HIGH);  // Green on for USB
   digitalWrite(LED_BLE, mode == 0 ? LOW : HIGH);  // Blue on for BT
 }
 
@@ -665,7 +665,7 @@ void setup() {
   // Pins init
   pinMode(MFB_KEY, INPUT);   // MFB_KEY is active LOW
   pinMode(LOW_BATT, INPUT_PULLUP);  // LOW_BATT is active low.
-  pinMode(LED_USB, OUTPUT);
+  pinMode(LED_FLA, OUTPUT);
   pinMode(LED_BLE, OUTPUT);
   pinMode(LED_STA, OUTPUT);
   offLED();  // Turn all LEDs off
@@ -724,7 +724,7 @@ void loop() {
     // What if Bluetooth not connected?
     else {                      // if bt_connected=false only, BLUE LED = off.
       if (bt_waitingconnect) {  // if bt_connected=false and BT wait for connect, toggle BLUE LED.
-        digitalWrite(LED_USB, HIGH);
+        digitalWrite(LED_FLA, HIGH);
         digitalWrite(LED_STA, HIGH);
         if (Count100ms % 10 == 0) {                         //every 1000ms.
           digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);  // Blink Blue LED when not connected (slow blink)
@@ -758,7 +758,7 @@ void loop() {
 
     // Low battery light flashing
     if (voltage <= 3.5) {                         // LOW_BATT is active low.
-      digitalWrite(LED_USB, HIGH);
+      digitalWrite(LED_FLA, HIGH);
       digitalWrite(LED_BLE, HIGH);
       if (Count100ms % 10 == 0) {                         //every 1000ms.
         digitalWrite(LED_STA, digitalRead(LED_STA) ^ 1);  // Blink RED LED when LOW_BATT = 0.

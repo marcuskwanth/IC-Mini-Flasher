@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250716.1
+Mini Flasher ESP32 Program - Version 250716.2
 Updated 2025-07-13
 */
 
@@ -26,7 +26,7 @@ constexpr uint8_t LCD_COLS = 16;
 constexpr uint8_t LCD_ROWS = 2;
 
 // GPIO + LED PWM Definition (change if necessary for your pins)
-#define LED_USB 27
+#define LED_FLA 27
 #define LED_BLE 2
 #define LED_STA 13
 
@@ -146,6 +146,7 @@ void setColour(char c, uint8_t val);
 void blinkLED();
 void offLED();
 void updateLEDs();
+void checkMiniFlasher();
 
 // LEDs Sequences
 bool parseLedSequence(const uint8_t *buf, uint16_t len);
@@ -181,17 +182,19 @@ void updateOutputHighPin() {
 // Function to blink the LED briefly when the button is released in handleMFB()
 void blinkLED() {
   digitalWrite(LED_STA, LOW);
-  delay(100);
+  delay(5);
   digitalWrite(LED_STA, HIGH);
 }
 void offLED() {
-  digitalWrite(LED_USB, HIGH);
+  digitalWrite(LED_FLA, HIGH);
   digitalWrite(LED_BLE, HIGH);
   digitalWrite(LED_STA, HIGH);
 }
 void updateLEDs() {
-  digitalWrite(LED_USB, mode == 1 ? LOW : HIGH);  // Green on for USB
-  digitalWrite(LED_BLE, mode == 0 ? LOW : HIGH);  // Blue on for BT
+  digitalWrite(LED_BLE, mode == 0 ? LOW : HIGH);  // Blue on for BT, NONE for USB
+}
+void checkMiniFlasher() {
+  digitalWrite(LED_FLA, mini_flashing ? LOW : HIGH);;
 }
 static inline uint8_t mapLevel(uint8_t levelRaw) {
   if (LED_ACTIVE_LOW) return 255 - levelRaw;
@@ -328,7 +331,7 @@ bool receivePacket() {
   static uint8_t csLo = 0, csHi = 0;
 
   while (Serial.available() || SerialBT.available()) {
-    offLED(); delay(5); updateLEDs();
+    blinkLED();
     uint8_t b = mode == 1 ? Serial.read() : SerialBT.read();
     switch (st) {
       case S1:
@@ -520,7 +523,7 @@ void handleMFB() {
       // CASE 1: Short press handling (200ms-2000ms)
       if (pressDuration > SHORT_PRESS_TIME && pressDuration < LONG_PRESS_TIME && !bt_waitingconnect) {
         Serial.println("*Short Press detected...");
-        blinkLED();
+        // blinkLED();
         mini_flashing = !mini_flashing;
         if (mini_flashing) {
           if (stepCount) {
@@ -687,7 +690,7 @@ void setup() {
   // Pins init
   pinMode(MFB_KEY, INPUT);   // MFB_KEY is active LOW
   pinMode(LOW_BATT, INPUT);  // LOW_BATT analog input (FIXED)
-  pinMode(LED_USB, OUTPUT);
+  pinMode(LED_FLA, OUTPUT);
   pinMode(LED_BLE, OUTPUT);
   pinMode(LED_STA, OUTPUT);
   pinMode(OUTPUT_HIGH, OUTPUT);
@@ -797,6 +800,7 @@ void loop() {
     // Check MFB and POW state and perform actions accordingly after powering on!!
     handleMFB();
     handlePOW();
+    checkMiniFlasher();
 
     // Check if Bluetooth is connected
     if (mode == 0) {
@@ -809,14 +813,13 @@ void loop() {
 
     // What if Bluetooth not connected?
     if (bt_waitingconnect) {  // if bt_connected=false and BT wait for connect, toggle BLUE LED.
-      digitalWrite(LED_USB, HIGH);
+      digitalWrite(LED_FLA, HIGH);
       digitalWrite(LED_STA, HIGH);
       if (Count100ms % 3 == 0) {
         digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);  // Blink Blue LED when not connected (slow blink)
       }
     }
     else {
-      offLED();
       updateLEDs();
     }
 
@@ -833,7 +836,7 @@ void loop() {
 
     // Low battery light flashing
     if (voltage <= 3.5) {  // LOW_BATT is active low.
-      digitalWrite(LED_USB, HIGH);
+      digitalWrite(LED_FLA, HIGH);
       digitalWrite(LED_BLE, HIGH);
       if (Count100ms % 10 == 0) {
         digitalWrite(LED_STA, digitalRead(LED_STA) ^ 1);  // Blink RED LED when LOW_BATT = 0.
