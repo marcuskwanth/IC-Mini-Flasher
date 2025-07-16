@@ -141,6 +141,7 @@ void sendStoredLedPkt();
 void sendPollAck();
 
 // Color and LEDs
+void updateOutputHighPin();
 void setAllLeds(uint8_t val);
 void setColour(char c, uint8_t val);
 void blinkLED();
@@ -202,22 +203,24 @@ static inline uint8_t mapLevel(uint8_t levelRaw) {
 }
 void setAllLeds(uint8_t val) {  // COMMON-ANODE → invert
   uint8_t lvl = mapLevel(val);
+  delay(3);
   ledcWrite(PWM_CH_RED, lvl);
   ledcWrite(PWM_CH_GRN, lvl);
   ledcWrite(PWM_CH_BLU, lvl);
   ledcWrite(PWM_CH_YEL, lvl);
-  delay(5);
+  delay(3);
   updateOutputHighPin();
 }
 void setColour(char c, uint8_t val) {
   uint8_t lvl = mapLevel(val);
+  delay(3);
   switch (c) {
     case 'R': ledcWrite(PWM_CH_RED, lvl); break;
     case 'G': ledcWrite(PWM_CH_GRN, lvl); break;
     case 'B': ledcWrite(PWM_CH_BLU, lvl); break;
     case 'I': ledcWrite(PWM_CH_YEL, lvl); break;
   }
-  delay(5);
+  delay(3);
   updateOutputHighPin();
 }
 // LED-Sequence Related
@@ -256,6 +259,7 @@ bool parseLedSequence(const uint8_t *buf, uint16_t len) {
 }
 void startSequence() {
   seqEnabled = true;
+  mini_flashing = true;
   curStep = 0;
   inOnTime = true;
   repeatRemain = repeatCfg ? repeatCfg : 0xFFFFFFFF;  // infinite => large
@@ -265,6 +269,7 @@ void startSequence() {
 }
 void stopSequence() {
   seqEnabled = false;
+  mini_flashing = false;
   setAllLeds(0);
 }
 
@@ -372,10 +377,8 @@ bool receivePacket() {
         parseLedSequence(payload, rxLen);
         if (seqEnabled) {
           stopSequence();
-          mini_flashing = false;
         }
         startSequence();
-        mini_flashing = true;
       }
 
       if (dataType == DATA_REQU) {
@@ -529,7 +532,8 @@ void handleMFB() {
           if (stepCount) {
             startSequence();
           }
-        } else {
+        } 
+        else {
           stopSequence();
         }
         Serial.println(mini_flashing ? "Mini-flasher ON" : "Mini-flasher OFF");
@@ -749,13 +753,11 @@ void loop() {
   }
 
   /* 2. LCD page rotation (debugging)*/
-  /*
   if (pktLen && (int32_t)(millis() - nextTurn) >= 0) {
     pageIndex = (pageIndex + 1) % pageCnt;
     showPage(pageIndex);
     nextTurn += PAGE_TIME_MS;
   }
-  */
 
   /* 3. Sequencer state machine (ADDED) */
   if (seqEnabled && (int32_t)(millis() - nextEvent) >= 0) {
@@ -772,13 +774,14 @@ void loop() {
         /* list finished */
         if (repeatCfg == 0) {  // infinite
           curStep = 0;
-        } else {
+        } 
+        else {
           if (repeatRemain > 1) {
             repeatRemain--;
             curStep = 0;
-          } else {  // done
+          } 
+          else {  // done
             stopSequence();
-            mini_flashing = false;
           }
         }
       }
