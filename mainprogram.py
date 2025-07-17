@@ -1,11 +1,10 @@
 """
-IC-Project : Mini-Flasher GUI - Version 250712.3
+IC-Project : Mini-Flasher GUI - Version 250717.2
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Check the language for Chinese-languaged Windows PC
-2. Add menu bar for non-important functions
 
 *Partly done here, next need to test with real hardware
 """
@@ -31,7 +30,6 @@ cfg_wintitle = "IC-Project  ·  Configurations"
 
 # ──────────────── Global configuration ───────────────────────────────
 INIT_SCAN           = 1                 # 0 = disable USB COM polling functionality, 1 = enable
-NEW_LAYOUT          = 1                 # 0 = with original layout, 1 = new layout with the buttons on LHS
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
 POLLING_PKT         = ""                # Any payload for USB COM polling?
@@ -40,9 +38,9 @@ POLLING_ECHO_PKT    = ""                # These 2 not sure if needed, just put t
 REQUEST_ECHO_PKT    = ""
 TARGET_PORT         = 1                 # 1 For BT-SPP!
 BAUDRATE            = 115_200
-READ_TIMEOUT_USB    = 2                 # USB: seconds for optional loop-back read
+READ_TIMEOUT_USB    = 1                 # USB: seconds for optional loop-back read
 READ_TIMEOUT_BT     = 2                 # BLUETOOTH: seconds for optional loop-back read
-WRITE_TIMEOUT_USB   = 5
+WRITE_TIMEOUT_USB   = 1
 COOLDOWN            = 10                # Send button cooldown in seconds
 
 # ──────────────── Packet Header configuration ────────────────────────
@@ -52,21 +50,22 @@ POLL_LINK           = 0x01              # Type 1: Be used when polling the corre
 READ_SETTING        = 0x02              # Type 2: Be used when clicking "Request Data"
 
 # ──────────────── Poll-watchdog configuration ──────────────────────
-
-POLL_INTERVAL_MS     = 1500                 # watchdog tick   (1 s)
-POLL_FAIL_TIMEOUT    = 30                   # open config dlg after 30 s consecutive failure
+POLL_INTERVAL_MS     = 1500                 # watchdog tick   (1.5s)
+POLL_FAIL_TIMEOUT    = 30                   # open config dlg after 30s consecutive failure
 
 _poll_lock           = threading.Lock()
 _poll_sending        = threading.Event()    # raised while a user-Tx is active
 _poll_fail_since     = None                 # time.time() when failure streak started
 _lock_acquired_at    = 0                    # for stale-lock detection
 _watchdog_id         = None                 # after() handle so we can stop / restart
+working_thread       = None
 
 # ──────────────── GUI/Console Elements configuration ─────────────────
 device_name         = "ESP32"
-buttons_width       = 12
+buttons_width       = 15
 box_mmi_width       = 10
 scale_thres         = 50
+font_size           = 10
 row_num_text        = "Sequences: "
 select_text         = "<Please Select>"
 delete_text         = "X"
@@ -258,7 +257,7 @@ def disconnect_bluetooth():
     if bt_socket:
         try:
             bt_socket.close()
-            time.sleep(1)   # A buffer for connection closing
+            time.sleep(0.5)   # A buffer for connection closing
             print(f"{info_prefix}Bluetooth connection closed")
         except Exception as e:
             print(f"{error_prefix}Error closing Bluetooth: {e}")
@@ -326,16 +325,20 @@ def refresh_port_list(combo):
 
 """Automatically detect the correct USB port by sending polling packets"""
 def usb_polling_start():
-    usb_polling()
-    root.after(POLL_INTERVAL_MS, polling_watchdog)
+    root.after(100, start_watchdog)
 def usb_polling():
     """
     Scan all available serial ports with a 7-byte poll packet.
     The port that echoes the packet is accepted as the Mini-Flasher.
     """
+    print(f"**Active threads: {threading.active_count()}")
+    active_threads = threading.enumerate()
+    print("**Currently active threads:")
+    for thread in active_threads:
+        print(f"- Name: {thread.name}, Is Daemon: {thread.daemon}, Is Alive: {thread.is_alive()}")
+
     if mode_var.get() != 0:            # skip if GUI is in Bluetooth mode
         return
-
     info_status("Detecting device on USB ports...", fg='grey', type=1)
     root.update()
 
@@ -352,24 +355,31 @@ def usb_polling():
     # first try the port remembered in config, then the remaining ones
     saved = port_var.get().split(' ')[0] if port_var.get() else ""
     order = ([saved] if saved else []) + [p[0] for p in ports if p[0] != saved]
+    print(f"{info_prefix}USB device Order: {order}")
     
     echo = b""
     for dev in order:
         info_status(f"Trying to poll from {dev}...", fg='grey', type=1)
+        print(f"{info_prefix}{dev} is trying now")
         root.update()
         try:
-            echo = usb_polling_send(dev, pkt, expect_echo=exp_echo)
+            # A quick fix for polling becoming fail if the app sends large packet to the ESP32
+            if dev == saved:
+                for i in range(0,5): # try for 5 seconds for now
+                    echo = usb_polling_send(dev, pkt, expect_echo=exp_echo)
+                    if echo == pkt:
+                        break
+                    else:
+                        time.sleep(1)
         except serial.SerialException as e:
             print(f"{error_prefix} Polling failed whilst opening {dev}: {e}")
             set_poll_led(False)
-            # ---- saved port vanished → forget it immediately ----------
+            # forget saved port if it cannot be polled/found
             if dev == saved:
                 print(f"{info_prefix}{dev} disappeared – clearing saved COM port")
                 port_var.set("")
                 save_config(mode_var.get(), "", bt_mac.get(), time_allow.get(), poll=True)
-                info_status(msg=f"{dev} disappeared – clearing saved COM port.", fg='grey', type=1)
                 continue
-            return True
         ok = (echo == pkt)
         set_poll_led(ok)
 
@@ -382,8 +392,9 @@ def usb_polling():
             save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get(), poll=True)
             return True
 
-    info_status("Device cannot be detected on USB ports. Retrying...", fg='grey', type=1)
+    info_status("Refreshing USB COM port list and try again...", fg='grey', type=1)
     set_poll_led(False)
+    time.sleep(1)
 
 """Parent function that tries to send a packet to a specific port and return echo if received"""
 # ──────────────── USB helper that propagates errors ───────────────
@@ -393,7 +404,6 @@ def usb_polling_send(port_device: str, packet: bytes, expect_echo: int = 0) -> b
     Any SerialException is allowed to propagate to the caller.
     """
     usb_socket = serial.Serial(port_device, BAUDRATE, timeout=READ_TIMEOUT_USB, write_timeout=WRITE_TIMEOUT_USB)
-    print(f"{info_prefix}{port_device} is trying now")
     with usb_socket as ser:
         n = ser.write(packet)
         print(f"{info_prefix}PC wrote {n}/{len(packet)} bytes to {port_device}")
@@ -409,7 +419,7 @@ def disconnect_usb():
     if usb_socket:
         try:
             usb_socket.close()
-            time.sleep(1)   # A buffer for connection closing
+            time.sleep(0.5)   # A buffer for connection closing
             print(f"{info_prefix}USB connection closed")
         except Exception as e:
             print(f"{error_prefix}Error closing USB Port: {e}")
@@ -624,53 +634,43 @@ def stop_watchdog():
         root.after_cancel(_watchdog_id)
         _watchdog_id = None
 
+# ---------- worker that does the actual polling ---------------------
+def _worker():
+    global _poll_fail_since
+    ok = False
+    try:
+        ok = usb_polling()          # True  ==> device found
+    finally:
+        print("**Releasng Lock")
+        _poll_lock.release()
+
+    print(f"{info_prefix}POLL STAT: {ok}")
+    if ok:
+        _poll_fail_since = None
+    else:
+        if _poll_fail_since is None:
+            _poll_fail_since = time.time()
+        elif time.time() - _poll_fail_since >= POLL_FAIL_TIMEOUT:
+            _poll_fail_since = None          # pop dlg only once
+            root.after(0, config_window)
+    
 def polling_watchdog():
-    print("DEBUG mode =", mode_var.get(),
-      "sending =", _poll_sending.is_set(),
-      "lock =", _poll_lock.locked())
     """
     Periodically tries usb_polling().  Extra features:
       • releases stale locks
       • keeps track of continuous failures and re-opens the config window
         after POLL_FAIL_TIMEOUT seconds
     """
-    global _lock_acquired_at, _poll_fail_since, _watchdog_id
-
-    # ---------- salvage a stuck lock (e.g. PySerial hangs) --------------
-    if _poll_lock.locked() and time.time() - _lock_acquired_at > 5:
-        try:
-            _poll_lock.release()
-            print("WARN watchdog lock was stale – force-released")
-        except RuntimeError:
-            pass
-
-    # ---------- worker that does the actual polling ---------------------
-    def _worker():
-        global _poll_fail_since
-        ok = False
-        try:
-            ok = usb_polling()          # True  ==> device found
-        finally:
-            _poll_lock.release()
-
-        print(f"{info_prefix}POLL STAT: {ok}")
-        if ok:
-            _poll_fail_since = None
-        else:
-            if _poll_fail_since is None:
-                _poll_fail_since = time.time()
-            elif time.time() - _poll_fail_since >= POLL_FAIL_TIMEOUT:
-                _poll_fail_since = None          # pop dlg only once
-                root.after(0, config_window)
+    global _lock_acquired_at, _poll_fail_since, _watchdog_id, working_thread
+    print("DEBUG mode =", mode_var.get(), ", sending =", _poll_sending.is_set(), ", lock =", _poll_lock.locked())
 
     # ---------- schedule worker if allowed ------------------------------
     if mode_var.get() == 0 and not _poll_sending.is_set():
         if _poll_lock.acquire(blocking=False):
             _lock_acquired_at = time.time()
-            threading.Thread(target=_worker, daemon=True).start()
+            working_thread = threading.Thread(target=_worker, daemon=True, name="USB_POLL").start()
 
     _watchdog_id = root.after(POLL_INTERVAL_MS, polling_watchdog)
-
 
 # ──────────────── GUI File I/O ──────────────────────────────────────
 """Save current settings to file"""
@@ -786,34 +786,9 @@ def load_config():
     return config
 
 # ──────────────── GUI connection cfg ──────────────────────────────
-"""The code for the connection setting window"""
-def config_window():
-    config_win = tk.Toplevel(root)
-    config_win.title(cfg_wintitle)
-    config_win.resizable(False, False)
-    config_win.grab_set()
-    load_config()
-
-    def on_usb_refresh():
-        if INIT_SCAN == 1:
-            config_win.destroy()
-            info_status(msg=f"USB COM port polling started.", fg='grey')
-            usb_polling_start()
-        else: 
-            refresh_port_list(port_combo)
-
-    def on_cancel():
-        config_win.destroy()
-
-    def on_save():
-        save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
-        update_status()
-        start_watchdog()
-        config_win.destroy()
-
-    # HELP FUNCTION: Shows instructions for finding ports/devices
-    def show_help():
-        help_text = f"""
+"""HELP FUNCTION: Shows instructions for finding ports/devices"""
+def show_help():
+    help_text = f"""
         Help: How to find USB Serial Port / Bluetooth Host?
         
         USB Serial Port (COM Port):
@@ -842,7 +817,32 @@ def config_window():
            - Ensure it's not connected to another PC
            - Unpair and pair the {device_name} again
         """
-        messagebox.showinfo("Connection Help", help_text)
+    messagebox.showinfo("Connection Help", help_text)
+
+"""The code for the connection setting window"""
+def config_window():
+    config_win = tk.Toplevel(root)
+    config_win.title(cfg_wintitle)
+    config_win.resizable(False, False)
+    config_win.grab_set()
+    load_config()
+
+    def on_usb_refresh():
+        if INIT_SCAN == 1:
+            config_win.destroy()
+            info_status(msg=f"USB COM port polling started.", fg='grey')
+            usb_polling_start()
+        else: 
+            refresh_port_list(port_combo)
+
+    def on_cancel():
+        config_win.destroy()
+
+    def on_save():
+        save_config(mode_var.get(), port_var.get(), bt_mac.get(), time_allow.get())
+        update_status()
+        start_watchdog()
+        config_win.destroy()
     
     # Mode selection
     mode_frame = ttk.Frame(config_win)
@@ -882,7 +882,6 @@ def config_window():
     btn_frame = ttk.Frame(config_win)
     btn_frame.pack(fill='x', pady=20)
 
-    ttk.Button(btn_frame, text="Help", command=show_help, bootstyle="info-outline", width=5).pack(side='left', padx=20)
     ttk.Button(btn_frame, text="Cancel", command=on_cancel, bootstyle="secondary-outline", width=8).pack(side='right', padx=20)
     ttk.Button(btn_frame, text="Save", command=on_save, bootstyle="success-outline", width=8).pack(side='right')
 
@@ -1154,131 +1153,108 @@ def set_poll_led(ok: bool | None):
         poll_indicator.config(text="POLL FAIL", bootstyle="danger")
 
 # ──────────────── GUI layout ────────────────────────────────────────
+root.geometry("1400x600")
+root.resizable(True, True)
 
-if NEW_LAYOUT == 1: # New layout
-    root.geometry("1400x600")
-    root.resizable(True, True)
+# Menu bar for configuration
+menubar = tk.Menu(root)
+seq_menu = tk.Menu(menubar, tearoff=0)
+config_menu = tk.Menu(menubar, tearoff=0)
+help_menu = tk.Menu(menubar, tearoff=0)
 
-    main = ttk.Frame(root)
-    main.pack(side="top", fill=tk.BOTH, expand=True, padx=10, pady=10)
-    controls = ttk.Frame(main)
-    controls.pack(side="left", fill=tk.Y, padx=(0, 10))
-    table = ttk.Frame(main)
-    table.pack(side="right", fill=tk.BOTH, expand=True, padx=(0, 3))
+seq_menu.add_command(label="Request Data from Device", command=request_data_prerequisite, font = ("", font_size))
+seq_menu.add_command(label="Load Color Sequences Locally", command=load_settings, font = ("", font_size))
+seq_menu.add_command(label="Save Color Sequences Locally", command=save_settings, font = ("", font_size))
+config_menu.add_command(label="Configurations and Connections", command=config_window, font = ("", font_size))
+help_menu.add_command(label="How to connect to a device?", command=show_help, font = ("", font_size))
+menubar.add_cascade(label="Sequence", menu=seq_menu, font = ("", font_size))
+menubar.add_cascade(label="Options", menu=config_menu, font = ("", font_size))
+menubar.add_cascade(label="Help", menu=help_menu, font = ("", font_size))
+root.config(menu=menubar)
 
-    footer = ttk.Frame(root)
-    footer.pack(side="bottom", fill=tk.X, padx=10, pady=10)
-    status_frame = ttk.Frame(footer, borderwidth=1)
-    status_frame.pack(fill=tk.X, pady=(5, 0))
+main = ttk.Frame(root)
+main.pack(side="top", fill=tk.BOTH, expand=True, padx=10, pady=10)
+controls = ttk.Frame(main)
+controls.pack(side="left", fill=tk.Y, padx=(5, 20))
+table = ttk.Frame(main)
+table.pack(side="right", fill=tk.BOTH, expand=True, padx=(0, 3))
 
-    # left-side buttons, labels, and spinbox
-    ttk.Button(controls, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).pack(pady=5, anchor="w")
-    send_btn = ttk.Button(controls, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
-    send_btn.pack(pady=5, anchor="w")
-    ttk.Button(controls, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).pack(pady=5, anchor="w")
+footer = ttk.Frame(root)
+footer.pack(side="bottom", fill=tk.X, padx=10, pady=10)
+status_frame = ttk.Frame(footer, borderwidth=1)
+status_frame.pack(fill=tk.X, pady=(5, 0))
 
-    row_counter = ttk.Label(controls, textvariable=row_count_var)
-    row_counter.pack(pady=5, anchor="w")
+# left-side buttons, labels, and spinbox
+row_counter = ttk.Label(controls, textvariable=row_count_var, font = ("", font_size))
+row_counter.pack(pady=5, anchor="w")
 
-    total_time_label = ttk.Label(controls, textvariable=total_time_var)
-    total_time_label.pack(pady=5, anchor="w")
+total_time_label = ttk.Label(controls, textvariable=total_time_var, font = ("", font_size))
+total_time_label.pack(pady=5, anchor="w")
 
-    cycleframe = ttk.Frame(controls)
-    cycleframe.pack(pady=5, anchor="w")
-    ttk.Label(cycleframe, text="Cycles").pack(side="left")
-    ttk.Spinbox(cycleframe, from_=1, to=100, textvariable=cycles, width=5).pack(side="left", padx=5)
+cycleframe = ttk.Frame(controls)
+cycleframe.pack(pady=5, anchor="w")
+ttk.Label(cycleframe, text="Cycles").pack(side="left")
+ttk.Spinbox(cycleframe, from_=1, to=100, textvariable=cycles, width=5).pack(side="left", padx=5)
 
-    ttk.Button(controls, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).pack(pady=5, anchor="w")
-    if INIT_SCAN == 1:
-        ttk.Button(controls, text=usb_refresh_text, width=buttons_width, bootstyle="secondary-outline", command=usb_polling_start).pack(pady=5, anchor="w")
-    ttk.Button(controls, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).pack(pady=5, side="bottom", anchor="w")
-    ttk.Button(controls, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).pack(pady=5, side="bottom", anchor="w")
+#ttk.Button(controls, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).pack(pady=5, side="bottom", anchor="w")
+send_btn = ttk.Button(controls, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
+send_btn.pack(pady=5, side="bottom", anchor="w")
+ttk.Button(controls, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).pack(pady=5, side="bottom", anchor="w")
 
-    # Create scrollable table in right panel
-    canvas = tk.Canvas(table, borderwidth=0, highlightthickness=0)
-    scrollbar = ttk.Scrollbar(table, orient="vertical", command=canvas.yview)
-    scrollable_frame = ttk.Frame(canvas)
+# Create scrollable table in right panel
+canvas = tk.Canvas(table, borderwidth=0, highlightthickness=0)
+scrollbar = ttk.Scrollbar(table, orient="vertical", command=canvas.yview)
+scrollable_frame = ttk.Frame(canvas)
     
-    # Configure canvas scrolling
-    canvas.configure(yscrollcommand=scrollbar.set)
-    canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
+# Configure canvas scrolling
+canvas.configure(yscrollcommand=scrollbar.set)
+canvas.create_window((0, 0), window=scrollable_frame, anchor="nw")
     
-    # Function to update scroll region
-    def on_frame_configure(event):
-        canvas.configure(scrollregion=canvas.bbox("all"))
+# Function to update scroll region
+def on_frame_configure(event):
+    canvas.configure(scrollregion=canvas.bbox("all"))
     
-    scrollable_frame.bind("<Configure>", on_frame_configure)
+scrollable_frame.bind("<Configure>", on_frame_configure)
     
-    # Pack canvas and scrollbar
-    canvas.pack(side="left", fill="both", expand=True)
-    scrollbar.pack(side="right", fill="y")
-    table.pack_propagate(False)  # Prevent table from shrinking
+# Pack canvas and scrollbar
+canvas.pack(side="left", fill="both", expand=True)
+scrollbar.pack(side="right", fill="y")
+table.pack_propagate(False)  # Prevent table from shrinking
     
-    # Create table inside the scrollable frame
-    table = ttk.Frame(scrollable_frame)
-    table.pack(fill="both", expand=True, anchor="nw")  # Anchor to northwest
+# Create table inside the scrollable frame
+table = ttk.Frame(scrollable_frame)
+table.pack(fill="both", expand=True, anchor="nw")  # Anchor to northwest
     
-    # Bind mouse wheel for scrolling
-    def on_mousewheel(event):
-        canvas.yview_scroll(int(-1*(event.delta/120)), "units")
+# Bind mouse wheel for scrolling
+def on_mousewheel(event):
+    canvas.yview_scroll(int(-1*(event.delta/120)), "units")
     
-    canvas.bind_all("<MouseWheel>", on_mousewheel)
-    canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
-    canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
-
-else: # Old layout
-    main = ttk.Frame(root); 
-    main.pack(padx=10, pady=10, fill=tk.BOTH, expand=True)
-
-    table  = ttk.Frame(main)
-    table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-    status_frame = ttk.Frame(main)
-    status_frame.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
-    footer = ttk.Frame(main, relief='ridge')
-    footer.pack(side=tk.BOTTOM, pady=(10,0), fill=tk.X)
-
-    # footer buttons, labels, and spinbox
-    ttk.Button(footer, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).grid(row=0, column=0, padx=5, pady=5)
-    send_btn = ttk.Button(footer, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
-    send_btn.grid(row=0, column=1, padx=5, pady=5)
-    ttk.Button(footer, text=request_text, width=buttons_width, bootstyle="dark-outline", command=request_data_prerequisite).grid(row=0, column=2, padx=5, pady=5)
-
-    row_counter = ttk.Label(footer, textvariable=row_count_var)
-    row_counter.grid(row=0, column=3, padx=10, pady=5)
-    total_time_label = ttk.Label(footer, textvariable=total_time_var)
-    total_time_label.grid(row=0, column=4, padx=10, pady=5)
-
-    ttk.Label(footer, text="Cycles").grid(row=0, column=5, padx=(20, 5), pady=5)
-    ttk.Spinbox(footer, from_=1, to=100, textvariable=cycles, width=5).grid(row=0, column=6, padx=5, pady=5)
-
-    ttk.Button(footer, text=cfg_text, width=buttons_width, bootstyle="warning-outline", command=config_window).grid(row=0, column=7, padx=5, pady=5)
-    ttk.Button(footer, text="Save Settings", width=buttons_width, bootstyle="primary-outline", command=save_settings).grid(row=0, column=8, padx=5, pady=5)
-    ttk.Button(footer, text="Load Settings", width=buttons_width, bootstyle="info-outline", command=load_settings).grid(row=0, column=9, padx=5, pady=5)
-    if INIT_SCAN == 1:
-        ttk.Button(footer, text=usb_refresh_text, width=buttons_width, bootstyle="light-outline", command=usb_polling_start).grid(row=0, column=10, padx=5, pady=5)
+canvas.bind_all("<MouseWheel>", on_mousewheel)
+canvas.bind_all("<Button-4>", lambda e: canvas.yview_scroll(-1, "units"))
+canvas.bind_all("<Button-5>", lambda e: canvas.yview_scroll(1, "units"))
 
 # Create table header
 for col, h in enumerate(headers):
     width = 8 if col == 0 else None
-    ttk.Label(table, text=h, width=width).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
+    ttk.Label(table, text=h, width=width, font = ("", font_size)).grid(row=0, column=col, padx=5, pady=5, sticky="nsew")
     table.grid_columnconfigure(col, weight=1 if col > 0 else 0)  # Don't expand remove column
 for col in range(len(headers)):
     table.grid_columnconfigure(col, weight=1, uniform="col")
 
 # Status at the bottom
-port_indicator = ttk.Label(status_frame, text="Unknown")
+port_indicator = ttk.Label(status_frame, text="Unknown", font = ("", font_size))
 port_indicator.pack(side="right")
-mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger")
+mode_indicator = ttk.Label(status_frame, text="Unknown", bootstyle="danger", font = ("", font_size))
 mode_indicator.pack(side="right", padx=(20, 10))
 
 # NEW badge showing poll result
-poll_indicator = ttk.Label(status_frame, text="POLL ?", bootstyle="secondary")
+poll_indicator = ttk.Label(status_frame, text="POLL ?", bootstyle="secondary", font = ("", font_size))
 poll_indicator.pack(side="right", padx=(10, 0))
 
-status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
+status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey', font = ("", font_size))
 status_indicator.pack(side="left")
 
-poll_status_indicator = ttk.Label(status_frame, text="Unknown", foreground='grey')
+poll_status_indicator = ttk.Label(status_frame, text="Starting USB COM polling", foreground='grey', font = ("", font_size))
 poll_status_indicator.pack(side="bottom")
 
 # initialise badge
