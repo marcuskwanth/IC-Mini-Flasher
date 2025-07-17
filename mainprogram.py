@@ -371,6 +371,8 @@ def usb_polling():
                         break
                     else:
                         time.sleep(1)
+            else:
+                echo = usb_polling_send(dev, pkt, expect_echo=exp_echo)
         except serial.SerialException as e:
             print(f"{error_prefix} Polling failed whilst opening {dev}: {e}")
             set_poll_led(False)
