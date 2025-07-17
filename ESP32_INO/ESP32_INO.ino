@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250716.2
+Mini Flasher ESP32 Program - Version 250717.1
 Updated 2025-07-13
 */
 
@@ -26,22 +26,21 @@ constexpr uint8_t LCD_COLS = 16;
 constexpr uint8_t LCD_ROWS = 2;
 
 // GPIO + LED PWM Definition (change if necessary for your pins)
-#define LED_FLA 27
-#define LED_BLE 2
-#define LED_STA 13
+#define LED_FLA 27    // Mini-flasher indicator light (GREEN)
+#define LED_BLE 2     // Bluetooth mode indicator light (BLUE)
+#define LED_BATT 13   // Low battery indicator light (RED)
 
 #define RED_PIN 25
 #define GRN_PIN 26
 #define BLUE_PIN 18
 #define YEL_PIN 14   // ‘I’ in the CSV packet
+
 #define LOW_BATT 39  // Battery Voltage ADC GPIO pin
 
-#define POW_KEY 4    // Used as power on/off the device
-#define MFB_KEY 17   // Need to set to input+internal_pullup, active = LOW
+#define POW_KEY 4    // Used as power on/off the device, active = LOW
+#define MFB_KEY 17   // Used as switch mode + control mini flasher, active = LOW
 
 #define OUTPUT_HIGH 19 // Set output to high to a pin when the a LED color is lit
-
-#define LED_ACTIVE_LOW 1
 
 constexpr uint8_t PWM_CH_RED = 0;
 constexpr uint8_t PWM_CH_GRN = 1;
@@ -53,6 +52,7 @@ constexpr uint8_t PWM_BITS = 8;  // intensity 0-255
 // Timing Constants Definition
 #define LONG_PRESS_TIME 2000     // Long press duration in milliseconds
 #define SHORT_PRESS_TIME 200     // Short press duration in milliseconds
+#define LED_ACTIVE_LOW 1         // Used if active is inverted (LOW = 1 / HIGH = 0) for the mini flasher light
 
 // Payload packet limits
 constexpr uint16_t PAYLOAD_MAX = 1002;
@@ -182,14 +182,14 @@ void updateOutputHighPin() {
 }
 // Function to blink the LED briefly when the button is released in handleMFB()
 void blinkLED() {
-  digitalWrite(LED_STA, LOW);
+  digitalWrite(LED_BATT, LOW);
   delay(5);
-  digitalWrite(LED_STA, HIGH);
+  digitalWrite(LED_BATT, HIGH);
 }
 void offLED() {
   digitalWrite(LED_FLA, HIGH);
   digitalWrite(LED_BLE, HIGH);
-  digitalWrite(LED_STA, HIGH);
+  digitalWrite(LED_BATT, HIGH);
 }
 void updateLEDs() {
   digitalWrite(LED_BLE, mode == 0 ? LOW : HIGH);  // Blue on for BT, NONE for USB
@@ -696,7 +696,7 @@ void setup() {
   pinMode(LOW_BATT, INPUT);  // LOW_BATT analog input (FIXED)
   pinMode(LED_FLA, OUTPUT);
   pinMode(LED_BLE, OUTPUT);
-  pinMode(LED_STA, OUTPUT);
+  pinMode(LED_BATT, OUTPUT);
   pinMode(OUTPUT_HIGH, OUTPUT);
   digitalWrite(OUTPUT_HIGH, LOW);
   offLED();  // Turn all LEDs off
@@ -818,7 +818,7 @@ void loop() {
     // What if Bluetooth not connected?
     if (bt_waitingconnect) {  // if bt_connected=false and BT wait for connect, toggle BLUE LED.
       digitalWrite(LED_FLA, HIGH);
-      digitalWrite(LED_STA, HIGH);
+      digitalWrite(LED_BATT, HIGH);
       if (Count100ms % 3 == 0) {
         digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);  // Blink Blue LED when not connected (slow blink)
       }
@@ -843,12 +843,12 @@ void loop() {
       digitalWrite(LED_FLA, HIGH);
       digitalWrite(LED_BLE, HIGH);
       if (Count100ms % 10 == 0) {
-        digitalWrite(LED_STA, digitalRead(LED_STA) ^ 1);  // Blink RED LED when LOW_BATT = 0.
+        digitalWrite(LED_BATT, digitalRead(LED_BATT) ^ 1);  // Blink RED LED when LOW_BATT = 0.
       }
     } 
     else {
       if (!bt_waitingconnect) {
-        digitalWrite(LED_STA, HIGH);
+        digitalWrite(LED_BATT, HIGH);
         updateLEDs();
       }
     }

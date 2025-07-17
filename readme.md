@@ -1,3 +1,6 @@
+Version 250717.1
+- Renamed some symbols in ESP32 .ino file
+
 Version 250716.2
 - Removed USB Mode light indication, and blinking on quick press
 - Added mini-flasher ON/OFF status light indication (GREEN)
