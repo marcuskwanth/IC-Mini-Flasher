@@ -2,7 +2,7 @@ Version 250718.3
 - GUI App
     - Updated the COM opening error message
 
-E- SP32 INO
+- ESP32 INO
     - Fixed LED ON_TIME inconsistency
     - Fixed Bluetooth / Low battery flashing interval to be 1 second
 
