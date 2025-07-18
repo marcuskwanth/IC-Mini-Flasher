@@ -1,6 +1,7 @@
 Version 250718.2
 - GUI App
     - Added a USB COM polling toggle
+    - Removed INIT_SCAN function entirely (combined polling + USB scanning)
 ESP32 INO
     - Amended the low battery ADC pin to 26
     - Changed the button input logic to be internal PULL UP

@@ -30,7 +30,6 @@ root.title("IC-Project  ·  Mini-Flasher GUI")
 cfg_wintitle = "IC-Project  ·  Configurations"
 
 # ──────────────── Global configuration ───────────────────────────────
-INIT_SCAN           = 1                 # 0 = disable USB COM polling functionality, 1 = enable
 CONFIG_FILE         = "config.txt"
 SETTING_FILE        = "settings.txt"
 POLLING_PKT         = ""                # Any payload for USB COM polling?
@@ -70,7 +69,7 @@ font_size           = 10
 row_num_text        = "Sequences: "
 select_text         = "<Please Select>"
 delete_text         = "X"
-usb_refresh_text    = "↻" if INIT_SCAN == 0 else "Poll USB COM"
+usb_refresh_text    = "↻"
 bt_refresh_text     = "↻"
 add_row_text        = "Add Sequence"
 send_text           = "Send Data"
@@ -846,12 +845,7 @@ def config_window():
     load_config()
 
     def on_usb_refresh():
-        if INIT_SCAN == 1:
-            config_win.destroy()
-            info_status(msg=f"USB COM port polling started.", fg='grey')
-            usb_polling_start()
-        else: 
-            refresh_port_list(port_combo)
+        refresh_port_list(port_combo)
 
     def on_cancel():
         config_win.destroy()
@@ -875,12 +869,10 @@ def config_window():
     val_frame.pack(fill='x', padx=20, pady=10)
     
     ttk.Label(val_frame, text="USB COM Port:").grid(row=0, column=0, sticky='w', padx=(0,10))
-    if INIT_SCAN == 0:
-        port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
-        port_combo.grid(row=0, column=1, sticky='ew', padx=5)
-    refresh_port_btn = ttk.Button(val_frame, text=usb_refresh_text, width=3 if INIT_SCAN == 0 else 20, 
-                                  command=on_usb_refresh, bootstyle="secondary-outline" if INIT_SCAN == 0 else "dark-outline") # before: command=lambda: refresh_port_list(port_combo)
-    refresh_port_btn.grid(row=0, column=2 if INIT_SCAN == 0 else 1, padx=(5, 0))
+    port_combo = ttk.Combobox(val_frame, textvariable=port_var, width=20)
+    port_combo.grid(row=0, column=1, sticky='ew', padx=5)
+    refresh_port_btn = ttk.Button(val_frame, text=usb_refresh_text, width=3, command=on_usb_refresh, bootstyle="secondary-outline") # before: command=lambda: refresh_port_list(port_combo)
+    refresh_port_btn.grid(row=0, column=2, padx=(5, 0))
 
     ttk.Label(val_frame, text="Bluetooth Host:").grid(row=1, column=0, sticky='w', padx=(0,10))
     btmac_combo = ttk.Combobox(val_frame, textvariable=bt_mac, width=20)
@@ -1295,7 +1287,7 @@ update_status()
 # Post-Initialization tasks
 root.update_idletasks()
 root.minsize(root.winfo_reqwidth(), root.winfo_reqheight())  # Set minimum size to fit content
-usb_polling_start() if INIT_SCAN == 1 else config_window()
+usb_polling_start()
 
 def on_closing():
     stop_watchdog()
