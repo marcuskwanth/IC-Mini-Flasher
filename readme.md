@@ -1,3 +1,10 @@
+Version 250718.2
+- GUI App
+    - Added a USB COM polling toggle
+ESP32 INO
+    - Amended the low battery ADC pin to 26
+    - Changed the button input logic to be internal PULL UP
+
 Version 250717.2
 - GUI App
     - Fixed GUI USB polling issue related to watchdog

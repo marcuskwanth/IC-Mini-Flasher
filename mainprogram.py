@@ -1,10 +1,11 @@
 """
-IC-Project : Mini-Flasher GUI - Version 250717.2
+IC-Project : Mini-Flasher GUI - Version 250718.1
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Check the language for Chinese-languaged Windows PC
+2. Add a switch to toggle USB COM polling
 
 *Partly done here, next need to test with real hardware
 """
@@ -266,7 +267,7 @@ def disconnect_bluetooth():
             bt_connected = False
 
 """Send data over Bluetooth connection"""
-def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
+def send_bluetooth(packet: bytes, expect_echo: int = 0, read_response: bool = False) -> bytes:
     global bt_connected, _poll_sending 
     _poll_sending.set()
     if usb_socket:
@@ -288,6 +289,10 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
             bt_socket.send(packet)
         echo = b""
         # Below echo part is just for contingency in case it needs to echo something back!
+        if read_response:
+            response = read_one_packet(bt_socket)
+            print(f"{info_prefix}Reading response: {bar_hex(response)}")
+            return response
         if expect_echo:
             echo = bt_socket.recv(expect_echo)
             print(f"{info_prefix}Received echo: {bar_hex(echo)}")
@@ -304,6 +309,9 @@ def send_bluetooth(packet: bytes, expect_echo: int = 0) -> bytes:
 
 # ──────────────── USB Serial utilities ──────────────────────────────
 port_var = tk.StringVar(value="")        # currently selected port
+usb_polling_switch = tk.IntVar(value=1)
+usb_start_polling = False
+usb_polled = False
 
 """Return list of (device, description) tuples."""
 def available_ports():
@@ -324,6 +332,12 @@ def refresh_port_list(combo):
         port_var.set("")
 
 """Automatically detect the correct USB port by sending polling packets"""
+def switch_usb_polling():
+    print(usb_polling_switch.get())
+    if usb_polling_switch.get() == 1:
+        start_watchdog()
+    else:
+        stop_watchdog()
 def usb_polling_start():
     root.after(100, start_watchdog)
 def usb_polling():
@@ -469,9 +483,11 @@ def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False) -
 
 """Sequence for requesting configuration data from ESP32 device"""
 def request_data_prerequisite():
+    '''
     if mode_var.get() != 0:
         info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
         return
+    '''
     info_status(msg=f"Requesting settings from {device_name}...", fg='grey')
     result = messagebox.askyesno(request_text, "This action will override the current colour sequeence settings, are you sure you want to proceed?")
     if result:
@@ -479,9 +495,9 @@ def request_data_prerequisite():
 def request_data():
     pkt = build_packet(READ_SETTING, REQUEST_PKT) # Type 2
     print(f"{info_prefix}Requesting data with packet: {bar_hex(pkt)}")
-    disconnect_bluetooth()
+    # disconnect_bluetooth()
 
-    response = send_usb(pkt, read_response=True)
+    response = send_usb(pkt, read_response=True) if mode_var.get() == 1 else send_bluetooth(pkt, read_response=True)
     if not response:
         info_status(msg="No response received from device.", fg='red')
         return
@@ -1147,12 +1163,19 @@ def info_status(msg="Unknown.", fg='grey', type=0):
         poll_status_indicator.config(text=msg, foreground=fg)
 
 def set_poll_led(ok: bool | None):
+    global usb_polled
     if ok is None:
         poll_indicator.config(text="POLL ?", bootstyle="secondary")
+        usb_polled = False
     elif ok:
         poll_indicator.config(text="POLL OK", bootstyle="success")
+        usb_poll_checkbtn.state(["!selected"])
+        stop_watchdog()
+        usb_polled = True
     else:
         poll_indicator.config(text="POLL FAIL", bootstyle="danger")
+        usb_poll_checkbtn.state(["selected"])
+        usb_polled = False
 
 # ──────────────── GUI layout ────────────────────────────────────────
 root.geometry("1400x600")
@@ -1202,6 +1225,8 @@ ttk.Spinbox(cycleframe, from_=1, to=100, textvariable=cycles, width=5).pack(side
 send_btn = ttk.Button(controls, text=send_text, width=buttons_width, bootstyle="success-outline", command=send_action)
 send_btn.pack(pady=5, side="bottom", anchor="w")
 ttk.Button(controls, text=add_row_text, width=buttons_width, bootstyle="danger-outline", command=add_new_row).pack(pady=5, side="bottom", anchor="w")
+usb_poll_checkbtn = ttk.Checkbutton(controls, text='USB COM Polling', variable=usb_polling_switch, style='Roundtoggle.Toolbutton', command=switch_usb_polling, state="disabled" if mode_var.get() == 1 else "enabled")
+usb_poll_checkbtn.pack(padx=5, anchor="w")
 
 # Create scrollable table in right panel
 canvas = tk.Canvas(table, borderwidth=0, highlightthickness=0)

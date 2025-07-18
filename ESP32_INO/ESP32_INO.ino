@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250717.1
+Mini Flasher ESP32 Program - Version 250718.1
 Updated 2025-07-13
 */
 
@@ -35,7 +35,7 @@ constexpr uint8_t LCD_ROWS = 2;
 #define BLUE_PIN 18
 #define YEL_PIN 14   // ‘I’ in the CSV packet
 
-#define LOW_BATT 39  // Battery Voltage ADC GPIO pin
+#define LOW_BATT 36  // Battery Voltage ADC GPIO pin
 
 #define POW_KEY 4    // Used as power on/off the device, active = LOW
 #define MFB_KEY 17   // Used as switch mode + control mini flasher, active = LOW
@@ -674,7 +674,7 @@ void setup() {
   esp_sleep_enable_ext0_wakeup((gpio_num_t)POW_KEY, 0);                   // Config wake-up source
   esp_sleep_wakeup_cause_t wakeup_reason = esp_sleep_get_wakeup_cause();
 
-  pinMode(POW_KEY, INPUT);   // POW_KEY is active LOW
+  pinMode(POW_KEY, INPUT_PULLUP);   // POW_KEY is active LOW
   // "Fake" Power on to check if the power button is pressed for 2 seconds
   if (esp_sleep_get_wakeup_cause() == ESP_SLEEP_WAKEUP_EXT0) {
     unsigned long wakeTime = millis();
@@ -692,7 +692,7 @@ void setup() {
   delay(50);
 
   // Pins init
-  pinMode(MFB_KEY, INPUT);   // MFB_KEY is active LOW
+  pinMode(MFB_KEY, INPUT_PULLUP);   // MFB_KEY is active LOW
   pinMode(LOW_BATT, INPUT);  // LOW_BATT analog input (FIXED)
   pinMode(LED_FLA, OUTPUT);
   pinMode(LED_BLE, OUTPUT);
