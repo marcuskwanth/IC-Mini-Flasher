@@ -1,11 +1,11 @@
 """
-IC-Project : Mini-Flasher GUI - Version 250718.1
+IC-Project : Mini-Flasher GUI - Version 250718.3
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Check the language for Chinese-languaged Windows PC
-2. Add a switch to toggle USB COM polling
+2. Add Bluetooth request data capability
 
 *Partly done here, next need to test with real hardware
 """
@@ -474,7 +474,7 @@ def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False) -
                 return b""
         except serial.SerialException as e:
             print(f"{error_prefix}opening {port}: {e}")
-            messagebox.showerror("Error", f"Error whilst opening port {port}!")
+            messagebox.showerror("Error", f"Error whilst opening port {port}! Is the device disconnected or have the serial monitor opened? Try USB COM polling.")
             return b""
 
     finally:
@@ -496,7 +496,7 @@ def request_data():
     print(f"{info_prefix}Requesting data with packet: {bar_hex(pkt)}")
     # disconnect_bluetooth()
 
-    response = send_usb(pkt, read_response=True) if mode_var.get() == 1 else send_bluetooth(pkt, read_response=True)
+    response = send_usb(pkt, read_response=True) if mode_var.get() == 0 else send_bluetooth(pkt, read_response=True)
     if not response:
         info_status(msg="No response received from device.", fg='red')
         return

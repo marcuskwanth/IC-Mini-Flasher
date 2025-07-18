@@ -1,8 +1,16 @@
+Version 250718.3
+- GUI App
+    - Updated the COM opening error message
+
+E- SP32 INO
+    - Fixed LED ON_TIME inconsistency
+    - Fixed Bluetooth / Low battery flashing interval to be 1 second
+
 Version 250718.2
 - GUI App
     - Added a USB COM polling toggle
     - Removed INIT_SCAN function entirely (combined polling + USB scanning)
-ESP32 INO
+- ESP32 INO
     - Amended the low battery ADC pin to 26
     - Changed the button input logic to be internal PULL UP
 

@@ -1,6 +1,7 @@
 /*
-Mini Flasher ESP32 Program - Version 250718.1
-Updated 2025-07-13
+Mini Flasher ESP32 Program - Version 250718.3
+To do:
+1. Add Bluetooth request data capability
 */
 
 #include "esp_adc_cal.h"
@@ -12,7 +13,6 @@ Updated 2025-07-13
 #include "driver/rtc_io.h"
 #include <Wire.h>
 #include <LiquidCrystal_I2C.h>
-
 
 // ====================================================================
 // DEFINITIONS
@@ -128,6 +128,9 @@ bool bt_waitingconnect = false;               // Bluetooth have initializated bu
 bool just_powered_on = false;                 // Very important!
 unsigned long Count100ms = 0;                 // 100ms counter from 0.
 
+unsigned long pulseCurrTime = 0;
+static uint32_t pulseEndTime = 0; // Tracks when to end the pulse
+
 // ====================================================================
 // FORWARD DECLARATIONS
 // ====================================================================
@@ -176,14 +179,15 @@ uint32_t readADC_Cal(int ADC_Raw);  // Battery-related
 // Check if any LED is ON (PWM duty < 255)
 void updateOutputHighPin() {
   bool anyOn = (ledcRead(PWM_CH_RED) < 255) || (ledcRead(PWM_CH_GRN) < 255) || (ledcRead(PWM_CH_BLU) < 255) || (ledcRead(PWM_CH_YEL) < 255);
-  digitalWrite(OUTPUT_HIGH, anyOn ? HIGH : LOW);
-  delay(200);
-  digitalWrite(OUTPUT_HIGH, LOW);
+  if (anyOn && pulseEndTime == 0) {
+    digitalWrite(OUTPUT_HIGH, HIGH);
+    pulseEndTime = millis() + 200; // Set end time (200ms from now)
+  }
 }
 // Function to blink the LED briefly when the button is released in handleMFB()
 void blinkLED() {
   digitalWrite(LED_BATT, LOW);
-  delay(5);
+  delay(2);
   digitalWrite(LED_BATT, HIGH);
 }
 void offLED() {
@@ -203,25 +207,19 @@ static inline uint8_t mapLevel(uint8_t levelRaw) {
 }
 void setAllLeds(uint8_t val) {  // COMMON-ANODE → invert
   uint8_t lvl = mapLevel(val);
-  delay(3);
   ledcWrite(PWM_CH_RED, lvl);
   ledcWrite(PWM_CH_GRN, lvl);
   ledcWrite(PWM_CH_BLU, lvl);
   ledcWrite(PWM_CH_YEL, lvl);
-  delay(3);
-  updateOutputHighPin();
 }
 void setColour(char c, uint8_t val) {
   uint8_t lvl = mapLevel(val);
-  delay(3);
   switch (c) {
     case 'R': ledcWrite(PWM_CH_RED, lvl); break;
     case 'G': ledcWrite(PWM_CH_GRN, lvl); break;
     case 'B': ledcWrite(PWM_CH_BLU, lvl); break;
     case 'I': ledcWrite(PWM_CH_YEL, lvl); break;
   }
-  delay(3);
-  updateOutputHighPin();
 }
 // LED-Sequence Related
 bool parseLedSequence(const uint8_t *buf, uint16_t len) {
@@ -264,7 +262,10 @@ void startSequence() {
   inOnTime = true;
   repeatRemain = repeatCfg ? repeatCfg : 0xFFFFFFFF;  // infinite => large
   setAllLeds(0);
-  setColour(steps[0].colour, steps[0].level);
+
+  setColour(steps[0].colour, steps[0].level); 
+  delay(1); updateOutputHighPin();
+
   nextEvent = millis() + steps[0].onMs;
 }
 void stopSequence() {
@@ -691,16 +692,6 @@ void setup() {
   Serial.begin(115200);
   delay(50);
 
-  // Pins init
-  pinMode(MFB_KEY, INPUT_PULLUP);   // MFB_KEY is active LOW
-  pinMode(LOW_BATT, INPUT);  // LOW_BATT analog input (FIXED)
-  pinMode(LED_FLA, OUTPUT);
-  pinMode(LED_BLE, OUTPUT);
-  pinMode(LED_BATT, OUTPUT);
-  pinMode(OUTPUT_HIGH, OUTPUT);
-  digitalWrite(OUTPUT_HIGH, LOW);
-  offLED();  // Turn all LEDs off
-
   // PWM LED Setup
   ledcSetup(PWM_CH_RED, PWM_FREQ, PWM_BITS);
   ledcSetup(PWM_CH_GRN, PWM_FREQ, PWM_BITS);
@@ -712,6 +703,16 @@ void setup() {
   ledcAttachPin(YEL_PIN, PWM_CH_YEL);
   setAllLeds(0);  // Turn off PWM LEDs
   initLCD();
+
+  // Pins init
+  pinMode(MFB_KEY, INPUT_PULLUP);   // MFB_KEY is active LOW
+  pinMode(LOW_BATT, INPUT);  // LOW_BATT analog input (FIXED)
+  pinMode(LED_FLA, OUTPUT);
+  pinMode(LED_BLE, OUTPUT);
+  pinMode(LED_BATT, OUTPUT);
+  pinMode(OUTPUT_HIGH, OUTPUT);
+  digitalWrite(OUTPUT_HIGH, LOW);
+  offLED();  // Turn all LEDs off
 
   // Load stored LED sequence
   uint16_t lenBoot;
@@ -764,7 +765,7 @@ void loop() {
   /* 3. Sequencer state machine (ADDED) */
   if (seqEnabled && (int32_t)(millis() - nextEvent) >= 0) {
     if (inOnTime) {
-      setAllLeds(0);  // enter OFF phase
+      setAllLeds(0);
       inOnTime = false;
       nextEvent += steps[curStep].offMs;
     } 
@@ -788,11 +789,19 @@ void loop() {
         }
       }
       setColour(steps[curStep].colour, steps[curStep].level);
+      delay(1); updateOutputHighPin();
+
       nextEvent = millis() + steps[curStep].onMs;
     }
   }
 
-  /* 4. Timer interrupt for battery logging, button presses, BT/USB detection */
+  /* 4. Handle pulse timeout */
+  if (pulseEndTime != 0 && millis() >= pulseEndTime) {
+    digitalWrite(OUTPUT_HIGH, LOW);
+    pulseEndTime = 0; // Reset
+  }
+
+  /* 5. Timer interrupt for battery logging, button presses, BT/USB detection */
   if (mytimer.repeat()) {
 
     // Battery logger
@@ -817,10 +826,11 @@ void loop() {
 
     // What if Bluetooth not connected?
     if (bt_waitingconnect) {  // if bt_connected=false and BT wait for connect, toggle BLUE LED.
-      digitalWrite(LED_FLA, HIGH);
       digitalWrite(LED_BATT, HIGH);
-      if (Count100ms % 3 == 0) {
-        digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);  // Blink Blue LED when not connected (slow blink)
+      static uint32_t lastBTBlinkTime = 0;
+      if (millis() - lastBTBlinkTime >= 1000) { // 1 second interval
+        digitalWrite(LED_BLE, !digitalRead(LED_BLE));
+        lastBTBlinkTime = millis();
       }
     }
     else {
@@ -840,10 +850,11 @@ void loop() {
 
     // Low battery light flashing
     if (voltage <= 3.5) {  // LOW_BATT is active low.
-      digitalWrite(LED_FLA, HIGH);
       digitalWrite(LED_BLE, HIGH);
-      if (Count100ms % 10 == 0) {
-        digitalWrite(LED_BATT, digitalRead(LED_BATT) ^ 1);  // Blink RED LED when LOW_BATT = 0.
+      static uint32_t lastBattBlinkTime = 0;
+      if (millis() - lastBattBlinkTime >= 1000) { // 1 second interval
+        digitalWrite(LED_BATT, !digitalRead(LED_BATT));
+        lastBattBlinkTime = millis();
       }
     } 
     else {
@@ -858,62 +869,5 @@ void loop() {
     if (Count100ms == 100) {
       Count100ms = 0;
     }
-  }
-}
-
-/* ----------------------------------------------------------------- */
-/* UNUSED FUNCTION */
-/* ----------------------------------------------------------------- */
-// Function to detect long press on MFB_KEY during startup and BT Pairing mode
-bool detectLongPress() {
-  unsigned long pressStartTime = millis();
-
-  while (digitalRead(MFB_KEY) == LOW) {  // While button is pressed down
-    if (millis() - pressStartTime >= LONG_PRESS_TIME) {
-      Serial.println("Long press in detectionLongPress()");
-      return true;  // Long press detected
-    }
-  }
-
-  return false;  // No long press detected
-}
-// Initialization after booting up / waking up
-void initialize() {
-  // POWERED OFF CASE 1: Keep pressing on for 2 seconds for BT
-  if (detectLongPress()) {
-    blinkLED();
-    Serial.println("Using Bluetooth mode");
-    initializeBluetooth();
-
-    while (!SerialBT.hasClient()) {
-      if (Count100ms % 10 == 0) {  //every 1000ms.
-        digitalWrite(LED_BLE, digitalRead(LED_BLE) ^ 1);
-      }
-
-      if (detectLongPress()) {
-        Serial.println("Long press detected, switch using USB Mode!");
-        break;
-      }
-
-      Count100ms++;  // Increment 100ms counter.
-      if (Count100ms == 100) {  //count 10 sec. Prepare for 400ms on/off.
-        Count100ms = 0;         //reset the 100ms counter. From 0 to 99.
-      }
-    }
-    offLED();
-  }
-
-  if (SerialBT.hasClient()) {
-    // Exited loop if Bluetooth is connected
-    mode = 0;
-    bt_waitingconnect = false;
-    updateLEDs();
-    Serial.println("Connected via BT! ESP32 is ready to send data.");
-  } else {
-    // POWERED OFF CASE 2: NOT Keep pressing on for 2 seconds for USB Mode
-    Serial.println("Using USB Mode! ESP32 is ready to send data.");
-    mode = 1;
-    bt_waitingconnect = false;
-    updateLEDs();
   }
 }
