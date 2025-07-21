@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250718.3
+Mini Flasher ESP32 Program - Version 250721.1
 To do:
 1. Add Bluetooth request data capability
 */
@@ -121,7 +121,7 @@ bool bootInputLocked = true;  // flag is “erect” at power-on
 uint32_t bootUnlockAt = 0;    // timestamp when it drops
 
 // Misc
-int mode = 1;  // 0 = BT, 1 = USB
+int mode = 0;  // 0 = USB, 1 = BT
 bool is_powered_on = false;
 bool mini_flashing = false;
 bool bt_waitingconnect = false;               // Bluetooth have initializated but waiting for connection.
@@ -196,10 +196,10 @@ void offLED() {
   digitalWrite(LED_BATT, HIGH);
 }
 void updateLEDs() {
-  digitalWrite(LED_BLE, mode == 0 ? LOW : HIGH);  // Blue on for BT, NONE for USB
+  digitalWrite(LED_BLE, mode == 1 ? LOW : HIGH);  // Blue on for BT, NONE for USB
 }
 void checkMiniFlasher() {
-  digitalWrite(LED_FLA, mini_flashing ? LOW : HIGH);;
+  digitalWrite(LED_FLA, mini_flashing ? LOW : HIGH);
 }
 static inline uint8_t mapLevel(uint8_t levelRaw) {
   if (LED_ACTIVE_LOW) return 255 - levelRaw;
@@ -261,8 +261,9 @@ void startSequence() {
   curStep = 0;
   inOnTime = true;
   repeatRemain = repeatCfg ? repeatCfg : 0xFFFFFFFF;  // infinite => large
-  setAllLeds(0);
 
+  setAllLeds(0);
+  delay(1);
   setColour(steps[0].colour, steps[0].level); 
   delay(1); updateOutputHighPin();
 
@@ -313,7 +314,8 @@ void sendStoredLedPkt() {
 
   uint32_t sum = 0;
   auto put = [&](uint8_t b) {
-    Serial.write(b);
+    if (mode == 0) Serial.write(b);
+    else SerialBT.write(b);
     sum += b;
   };
 
@@ -326,8 +328,8 @@ void sendStoredLedPkt() {
   for (uint16_t i = 0; i < len; ++i) put(payload[i]);
 
   uint16_t cs = sum & 0xFFFF;
-  Serial.write(uint8_t(cs & 0xFF));
-  Serial.write(uint8_t(cs >> 8));
+  put(uint8_t(cs & 0xFF));
+  put(uint8_t(cs >> 8));
 }
 
 bool receivePacket() {
@@ -338,7 +340,7 @@ bool receivePacket() {
 
   while (Serial.available() || SerialBT.available()) {
     blinkLED();
-    uint8_t b = mode == 1 ? Serial.read() : SerialBT.read();
+    uint8_t b = mode == 0 ? Serial.read() : SerialBT.read();
     switch (st) {
       case S1:
         if (b == 0x5A) { sum = b; st = S2; } break;
@@ -508,7 +510,7 @@ void handleMFB() {
       Serial.println("*Long Press detected...");
       longPressHandled = true;  // Mark handled
 
-      if (mode == 1) {  // USB mode
+      if (mode == 0) {  // USB mode
         toggleBluetoothConnection();
         Serial.println("USB -> Bluetooth");
       } 
@@ -578,7 +580,7 @@ void initializeBluetooth() {
 // Function to toggle Bluetooth connection on/off based on button press
 void toggleBluetoothConnection() {
   // Checking serial before doing anything else
-  if (mode == 1) { 
+  if (mode == 0) { 
     Serial.flush();
     Serial.end();
   }
@@ -589,16 +591,16 @@ void toggleBluetoothConnection() {
   }
 
   // Performing actual toggling
-  if (mode == 1) {
+  if (mode == 0) {
     if (!bt_waitingconnect) {  // if BT is not connected and waiting for connection, exit with no action.
-      mode = 0;
+      mode = 1;
       initializeBluetooth();
       bt_waitingconnect = true;
       Serial.println("BT is turned ON.");
     }
   } 
-  else {  // mode == 0
-    mode = 1;
+  else {  // mode == 1
+    mode = 0;
     bt_waitingconnect = false;
     digitalWrite(LED_BLE, HIGH);  // Turn off Blue LED.
     Serial.println("BT is turned OFF.");
@@ -788,6 +790,7 @@ void loop() {
           }
         }
       }
+      delay(1);
       setColour(steps[curStep].colour, steps[curStep].level);
       delay(1); updateOutputHighPin();
 
@@ -817,7 +820,7 @@ void loop() {
     checkMiniFlasher();
 
     // Check if Bluetooth is connected
-    if (mode == 0) {
+    if (mode == 1) {
       if (!SerialBT.hasClient()) {
         stopSequence();
         bt_waitingconnect = true;
@@ -843,7 +846,7 @@ void loop() {
         offLED();
         digitalWrite(LED_BLE, LOW);
         Serial.println("Connected via BT! ESP32 is ready to send data after disconnected.");
-        mode = 0;
+        mode = 1;
         bt_waitingconnect = false;
       }
     }

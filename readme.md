@@ -1,7 +1,16 @@
+Version 250721.1
+- GUI App
+    - Updated the USB COM polling toggle: Now requires manual repolling, and auto-disabled in Bluetooth mode
+    - Watchdog now stops upon switching to Bluetooth mode, and restarts after switching to USB mode
+    - Added requesting data functionality for Bluetooth mode
+    - Bluetooth now connects upon saving config instead of after clicking the Send button
+- ESP32 INO
+    - Updated the data request function to support both USB and Bluetooth mode
+    - Fixed variable (mode) inconsistency between GUI App and ESP32 INO
+
 Version 250718.3
 - GUI App
     - Updated the COM opening error message
-
 - ESP32 INO
     - Fixed LED ON_TIME inconsistency
     - Fixed Bluetooth / Low battery flashing interval to be 1 second
