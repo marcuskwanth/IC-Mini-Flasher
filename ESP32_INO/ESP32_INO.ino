@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250721.1
+Mini Flasher ESP32 Program - Version 250721.2
 To do:
 1. Add Bluetooth request data capability
 */
@@ -187,7 +187,7 @@ void updateOutputHighPin() {
 // Function to blink the LED briefly when the button is released in handleMFB()
 void blinkLED() {
   digitalWrite(LED_BATT, LOW);
-  delay(2);
+  delay(100);
   digitalWrite(LED_BATT, HIGH);
 }
 void offLED() {
@@ -339,7 +339,7 @@ bool receivePacket() {
   static uint8_t csLo = 0, csHi = 0;
 
   while (Serial.available() || SerialBT.available()) {
-    blinkLED();
+    // blinkLED();
     uint8_t b = mode == 0 ? Serial.read() : SerialBT.read();
     switch (st) {
       case S1:
@@ -477,6 +477,7 @@ void handlePOW() {
     if (!just_powered_on) {
       if (pressDuration > LONG_PRESS_TIME && !longPressHandled) {
         Serial.println("*Very Long Press detected...");
+        blinkLED();
         just_powered_on = false;
 
         // Implement power off logic here
@@ -508,6 +509,7 @@ void handleMFB() {
     // CASE 2: Long press handling (>2000ms)
     if (pressDuration > LONG_PRESS_TIME && !longPressHandled) {
       Serial.println("*Long Press detected...");
+      blinkLED();
       longPressHandled = true;  // Mark handled
 
       if (mode == 0) {  // USB mode
@@ -529,7 +531,7 @@ void handleMFB() {
       // CASE 1: Short press handling (200ms-2000ms)
       if (pressDuration > SHORT_PRESS_TIME && pressDuration < LONG_PRESS_TIME && !bt_waitingconnect) {
         Serial.println("*Short Press detected...");
-        // blinkLED();
+        blinkLED();
         mini_flashing = !mini_flashing;
         if (mini_flashing) {
           if (stepCount) {
@@ -817,7 +819,7 @@ void loop() {
     // Check MFB and POW state and perform actions accordingly after powering on!!
     handleMFB();
     handlePOW();
-    checkMiniFlasher();
+    // checkMiniFlasher();
 
     // Check if Bluetooth is connected
     if (mode == 1) {

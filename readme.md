@@ -1,3 +1,8 @@
+Version 250721.2
+- ESP32 INO
+    - Removed mini flashing indication (Green LED)
+    - Re-enabled blinking LED (Red LED, 100ms) after valid key presses
+
 Version 250721.1
 - GUI App
     - Updated the USB COM polling toggle: Now requires manual repolling, and auto-disabled in Bluetooth mode
