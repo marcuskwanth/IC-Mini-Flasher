@@ -1,5 +1,5 @@
 /*
-Mini Flasher ESP32 Program - Version 250721.2
+Mini Flasher ESP32 Program - Version 250722.1
 To do:
 1. Add Bluetooth request data capability
 */
@@ -51,7 +51,7 @@ constexpr uint8_t PWM_BITS = 8;  // intensity 0-255
 
 // Timing Constants Definition
 #define LONG_PRESS_TIME 2000     // Long press duration in milliseconds
-#define SHORT_PRESS_TIME 200     // Short press duration in milliseconds
+#define SHORT_PRESS_TIME 100     // Short press duration in milliseconds
 #define LED_ACTIVE_LOW 1         // Used if active is inverted (LOW = 1 / HIGH = 0) for the mini flasher light
 
 // Payload packet limits
@@ -179,13 +179,19 @@ uint32_t readADC_Cal(int ADC_Raw);  // Battery-related
 // Check if any LED is ON (PWM duty < 255)
 void updateOutputHighPin() {
   bool anyOn = (ledcRead(PWM_CH_RED) < 255) || (ledcRead(PWM_CH_GRN) < 255) || (ledcRead(PWM_CH_BLU) < 255) || (ledcRead(PWM_CH_YEL) < 255);
+  /*
   if (anyOn && pulseEndTime == 0) {
     digitalWrite(OUTPUT_HIGH, HIGH);
     pulseEndTime = millis() + 200; // Set end time (200ms from now)
   }
+  */
+  // Now using full pulse instead of 200ms
+  if (anyOn) digitalWrite(OUTPUT_HIGH, HIGH);
+  else digitalWrite(OUTPUT_HIGH, LOW);
 }
 // Function to blink the LED briefly when the button is released in handleMFB()
 void blinkLED() {
+  offLED();
   digitalWrite(LED_BATT, LOW);
   delay(100);
   digitalWrite(LED_BATT, HIGH);
@@ -265,7 +271,6 @@ void startSequence() {
   setAllLeds(0);
   delay(1);
   setColour(steps[0].colour, steps[0].level); 
-  delay(1); updateOutputHighPin();
 
   nextEvent = millis() + steps[0].onMs;
 }
@@ -794,17 +799,20 @@ void loop() {
       }
       delay(1);
       setColour(steps[curStep].colour, steps[curStep].level);
-      delay(1); updateOutputHighPin();
 
       nextEvent = millis() + steps[curStep].onMs;
     }
   }
 
   /* 4. Handle pulse timeout */
+  /*
   if (pulseEndTime != 0 && millis() >= pulseEndTime) {
     digitalWrite(OUTPUT_HIGH, LOW);
     pulseEndTime = 0; // Reset
   }
+  */
+  // Now using full pulse instead of 200ms
+  updateOutputHighPin();
 
   /* 5. Timer interrupt for battery logging, button presses, BT/USB detection */
   if (mytimer.repeat()) {

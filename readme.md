@@ -1,3 +1,7 @@
+Version 250722.1
+- ESP32 INO
+    - Modified the TTL output to be set to HIGH if any LED is on, not 200ms pulse
+
 Version 250721.2
 - ESP32 INO
     - Removed mini flashing indication (Green LED)
