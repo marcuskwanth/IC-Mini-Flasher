@@ -1,3 +1,7 @@
+Version 2500808.1
+- ESP32 INO
+    - Reverted the logic of the color LEDs
+
 Version 250722.1
 - ESP32 INO
     - Modified the TTL output to be set to HIGH if any LED is on, not 200ms pulse
