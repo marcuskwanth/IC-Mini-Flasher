@@ -1,3 +1,8 @@
+Version 2500813.1
+- ESP32 INO
+    - Modified the power button into a color-sequence pause/resume button, only can activate when the sequence is active
+    - Removed all functionality related to ESP32 sleep mode
+
 Version 2500808.1
 - ESP32 INO
     - Reverted the logic of the color LEDs
