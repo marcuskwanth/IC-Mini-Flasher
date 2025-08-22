@@ -1,9 +1,15 @@
-Version 2500813.1
+Version 250822.1
+- GUI App
+    - Updated the maximum intensity (255 -> 4095)
+- ESP32 INO
+    - Updated the maximum intensity (255 -> 4095)
+
+Version 250813.1
 - ESP32 INO
     - Modified the power button into a color-sequence pause/resume button, only can activate when the sequence is active
     - Removed all functionality related to ESP32 sleep mode
 
-Version 2500808.1
+Version 250808.1
 - ESP32 INO
     - Reverted the logic of the color LEDs
 

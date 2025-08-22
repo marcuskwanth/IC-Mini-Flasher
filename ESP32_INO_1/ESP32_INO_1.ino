@@ -1,8 +1,10 @@
 /*
-Mini Flasher ESP32 Program - Version 250813.1
+Mini Flasher ESP32 Program - Version 250822.1
 To do:
 1. Add a button for pausing and resuming the sequence (DONE, need to test w/ real hardware)
 2. Need to add back the 3-sec delay before starting the color sequence
+3. Amend the PWM of the intensity from 8-bit ADC to 12-bit ADC (Max: 255 to 4095), 
+  modify this and software to support larger packet size (extra 1 byte!)
 */
 
 #include "esp_adc_cal.h"
@@ -48,15 +50,15 @@ constexpr uint8_t PWM_CH_GRN = 1;
 constexpr uint8_t PWM_CH_BLU = 2;
 constexpr uint8_t PWM_CH_YEL = 3;
 constexpr uint32_t PWM_FREQ = 5000;
-constexpr uint8_t PWM_BITS = 8;  // intensity 0-255
+constexpr uint8_t PWM_BITS = 12;  // intensity 0-255
 
 // Timing Constants Definition
 #define LONG_PRESS_TIME 2000     // Long press duration in milliseconds
 #define SHORT_PRESS_TIME 100     // Short press duration in milliseconds
-#define LED_ACTIVE_LOW 0         // Used if active is inverted (LOW = 1 / HIGH = 0) for the mini flasher light
+#define LED_ACTIVE_LOW 1         // Used if active is inverted (LOW = 1 / HIGH = 0) for the mini flasher light
 
 // Payload packet limits
-constexpr uint16_t PAYLOAD_MAX = 1002;
+constexpr uint16_t PAYLOAD_MAX = 1252;
 constexpr uint16_t PKT_MAX = PAYLOAD_MAX + 7;
 constexpr uint8_t MAX_PAGES = 60;
 
@@ -100,7 +102,7 @@ uint32_t TICK_MS = 100;
 // Colour-sequence description
 struct LedStep {
   char colour;    // 'R','G','B','I'
-  uint8_t level;  // 0-255
+  uint16_t level;  // 0-255
   uint32_t onMs;  // milliseconds
   uint32_t offMs;
 };
@@ -142,8 +144,8 @@ void sendPollAck();
 
 // Color and LEDs
 void updateOutputHighPin();
-void setAllLeds(uint8_t val);
-void setColour(char c, uint8_t val);
+void setAllLeds(uint16_t val);
+void setColour(char c, uint16_t val);
 void blinkLED();
 void offLED();
 void updateLEDs();
@@ -204,19 +206,19 @@ void updateLEDs() {
 void checkMiniFlasher() {
   digitalWrite(LED_FLA, mini_flashing ? LOW : HIGH);
 }
-static inline uint8_t mapLevel(uint8_t levelRaw) {
-  if (LED_ACTIVE_LOW) return 255 - levelRaw;
+static inline uint16_t  mapLevel(uint16_t  levelRaw) {
+  if (LED_ACTIVE_LOW) return 4095 - levelRaw;
   else return levelRaw;
 }
-void setAllLeds(uint8_t val) {  // COMMON-ANODE → invert
-  uint8_t lvl = mapLevel(val);
+void setAllLeds(uint16_t val) {  // COMMON-ANODE → invert
+  uint16_t lvl = mapLevel(val);
   ledcWrite(PWM_CH_RED, lvl);
   ledcWrite(PWM_CH_GRN, lvl);
   ledcWrite(PWM_CH_BLU, lvl);
   ledcWrite(PWM_CH_YEL, lvl);
 }
-void setColour(char c, uint8_t val) {
-  uint8_t lvl = mapLevel(val);
+void setColour(char c, uint16_t val) {
+  uint16_t lvl = mapLevel(val);
   switch (c) {
     case 'R': ledcWrite(PWM_CH_RED, lvl); break;
     case 'G': ledcWrite(PWM_CH_GRN, lvl); break;
@@ -244,7 +246,8 @@ bool parseLedSequence(const uint8_t *buf, uint16_t len) {
     char colour = tok[0];
     tok = strtok(nullptr, ",");
     if (!tok) break;
-    uint8_t lvl = atoi(tok);
+    uint16_t lvl = atoi(tok);
+    if (lvl > 4095) lvl = 4095;
     tok = strtok(nullptr, ",");
     if (!tok) break;
     uint16_t onS = atoi(tok);
@@ -716,13 +719,11 @@ void loop() {
   }
 
   /* 2. LCD page rotation (debugging)*/
-  /*
   if (pktLen && (int32_t)(millis() - nextTurn) >= 0) {
     pageIndex = (pageIndex + 1) % pageCnt;
     showPage(pageIndex);
     nextTurn += PAGE_TIME_MS;
   }
-  */
 
   /* 3. Sequencer state machine (ADDED) */
   if (seqEnabled && !seqPaused && (int32_t)(millis() - nextEvent) >= 0) {
@@ -775,7 +776,7 @@ void loop() {
     float voltage = float(readADC_Cal(rawValue)) / 1000 * 2;
     float voltage_old = (float)rawValue / 4095 * 2 * 3.8;
     lcd.setCursor(0, 1);
-    lcd.print("Voltage: "); lcd.print(voltage);
+    // lcd.print("Voltage: "); lcd.print(voltage);
 
     // Check MFB and POW state and perform actions accordingly after powering on!!
     handleMFB();

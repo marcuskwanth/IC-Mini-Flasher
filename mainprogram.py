@@ -1,11 +1,10 @@
 """
-IC-Project : Mini-Flasher GUI - Version 250721.1
+IC-Project : Mini-Flasher GUI - Version 250822.1
 ────────────────────────────────────────────────────────────────────────
 Tested with Python 3.11, ttkbootstrap 1.10, pyserial 3.5
 
 To-do:
 1. Check the language for Chinese-languaged Windows PC
-2. Add Bluetooth request data capability
 
 *Partly done here, next need to test with real hardware
 """
@@ -82,7 +81,7 @@ attention_prefix    = "ATTENTION: "     # info_prefix but shown in GUI status ba
 # ──────────────── GUI var configuration ──────────────────────────────
 default_cycles      = 5
 default_time_allow  = 10                # in minutes
-max_intensity       = 255
+max_intensity       = 4095
 max_on_off_time     = 100
 max_row             = 250               # max no. of colour sequences
 
@@ -125,13 +124,13 @@ bt_mac = tk.StringVar(value="")         # bluetooth mac address
 
 mode_var = tk.IntVar(value=0)    # 0 = USB, 1 = Bluetooth
 
-"""For macOS troubleshooting: List the Bluetooth devices in a macOS serial format"""
 def list_bt_devices():
+    """For macOS troubleshooting: List the Bluetooth devices in a macOS serial format"""
     print("Available Bluetooth devices in /dev:")
     print("\n".join(glob.glob("/dev/cu.") + glob.glob("/dev/tty.")))
 
-"""Connect to the selected Bluetooth device"""
 def connect_bluetooth():
+    """Connect to the selected Bluetooth device"""
     global bt_socket, bt_connected
     print(f"{info_prefix}Bluetooth MAC: {bt_mac.get()}")
     bt_addr = bt_mac.get()
@@ -189,8 +188,8 @@ def connect_bluetooth():
         bt_connected = False
         return False
 
-"""Re-scan bluetooth device and repopulate combobox."""
 def refresh_bt_list(combo):
+    """Re-scan bluetooth device and repopulate combobox."""
     print(f"{info_prefix}Scanning for Bluetooth devices...")
     combo.set("Scanning...")
     root.update()
@@ -244,8 +243,8 @@ def refresh_bt_list(combo):
         messagebox.showerror("Error", f"Bluetooth scanning failed: {e}") 
         root.after(0, lambda: combo.set("Scan failed, try again"))
 
-"""Update Bluetooth combo box with scan results"""
 def update_bt_list(combo, device_list):
+    """Update Bluetooth combo box with scan results"""
     if not device_list:
         combo.set("No devices found")
         combo["values"] = []
@@ -254,8 +253,8 @@ def update_bt_list(combo, device_list):
     combo["values"] = device_list
     combo.set(device_list[0])
 
-"""Disconnect from Bluetooth device"""
 def disconnect_bluetooth():
+    """Disconnect from Bluetooth device"""
     global bt_socket, bt_connected
     if bt_socket:
         try:
@@ -268,8 +267,8 @@ def disconnect_bluetooth():
             bt_socket = None
             bt_connected = False
 
-"""Send data over Bluetooth connection"""
 def send_bluetooth(packet: bytes, expect_echo: int = 0, read_response: bool = False) -> bytes:
+    """Send data over Bluetooth connection"""
     global bt_connected, _poll_sending 
     _poll_sending.set()
     if usb_socket:
@@ -314,12 +313,12 @@ usb_polling_switch = tk.IntVar(value=1)
 usb_start_polling = False
 usb_polled = False
 
-"""Return list of (device, description) tuples."""
 def available_ports():
+    """Return list of (device, description) tuples."""
     return [(p.device, p.description) for p in serial.tools.list_ports.comports()]
 
-"""Re-scan system ports and repopulate combobox."""
 def refresh_port_list(combo):
+    """Re-scan system ports and repopulate combobox."""
     print(f"{info_prefix}Refreshing port list")
     ports = available_ports()
     combo["values"] = [f"{d}  –  {s}" for d, s in ports]
@@ -332,8 +331,8 @@ def refresh_port_list(combo):
     else:
         port_var.set("")
 
-"""Automatically detect the correct USB port by sending polling packets"""
 def switch_usb_polling():
+    """Automatically detect the correct USB port by sending polling packets"""
     print(usb_polling_switch.get())
     if usb_polling_switch.get() == 1:
         start_watchdog()
@@ -348,6 +347,7 @@ def enable_usb_polling_in_usb():
     usb_poll_checkbtn.state(["selected"])
     start_watchdog()
 def usb_polling_start():
+    """Parent function that tries to send a packet to a specific port"""
     root.after(100, start_watchdog)
 def usb_polling():
     """
@@ -425,7 +425,6 @@ def usb_polling():
     usb_poll_checkbtn.state(["!selected"])
     stop_watchdog()
 
-"""Parent function that tries to send a packet to a specific port and return echo if received"""
 # ──────────────── USB helper that propagates errors ───────────────
 def usb_polling_send(port_device: str, packet: bytes, expect_echo: int = 0) -> bytes:
     """
@@ -442,8 +441,8 @@ def usb_polling_send(port_device: str, packet: bytes, expect_echo: int = 0) -> b
             return echo
     return b""          # (no echo requested)
 
-"""Disconnect from USB Port"""
 def disconnect_usb():
+    """Disconnect from USB Port"""
     global usb_socket
     if usb_socket:
         try:
@@ -455,8 +454,8 @@ def disconnect_usb():
         finally:
             usb_socket = None
 
-"""Open selected COM port, transmit packet, optionally read echo."""
 def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False) -> bytes:
+    """Open selected COM port, transmit packet, optionally read echo."""
     global usb_socket
     _poll_sending.set()              # ← mark that we’re in a send operation
     try:
@@ -499,8 +498,8 @@ def send_usb(packet: bytes, expect_echo: int = 0, read_response: bool = False) -
         _poll_sending.clear()        # ← always clear the flag on exit
 
 # ──────────────── Data Requesting ───────────────────────────────────
-"""Sequence for requesting configuration data from ESP32 device"""
 def request_data_prerequisite():
+    """Sequence for requesting configuration data from ESP32 device"""
     '''
     if mode_var.get() != 0:
         info_status(msg=f"{attention_prefix}Please select a USB serial connection first.", fg='red')
@@ -533,8 +532,8 @@ def request_data():
     print(f"{info_prefix}Loaded settings from device: {sequences} cycles={cycles_val}")
 
 # ──────────────── Packet helpers ────────────────────────────────────
-"""Build the payload data"""
 def build_payload() -> str:
+    """Build the payload data"""
     pieces=[]
     for i in range(len(params)):
         if params[i][0] == 'N': # if there exists a sequence with no colour selected
@@ -543,8 +542,8 @@ def build_payload() -> str:
     pieces.extend(["C", str(cycles.get())])
     return ",".join(pieces)
 
-"""Build the packet data with the header and payload data"""
 def build_packet(type, payload: str) -> bytes:
+    """Build the packet data with the header and payload data"""
     sync   = bytes([HEADER1, HEADER2])
     datatype = bytes([type])
     data   = payload.encode('ascii')
@@ -554,8 +553,8 @@ def build_packet(type, payload: str) -> bytes:
     print(f"{info_prefix}Header: {sync}, dataType: {datatype}")
     return sync + length + datatype + data + chk
 
-"""Convert bytes to grouped hex string, e.g. b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'"""
 def bar_hex(pkt: bytes, chunk: int = 5) -> str:
+    """Convert bytes to grouped hex string, e.g. b'\x5a\xA5…' ⇒ '5a a5 19 00 50 | 6c 65 61 73 65 | …'"""
     try:
         hexbytes = pkt.hex(' ').split()                    # ['5a', 'a5', ...]
         groups   = [' '.join(hexbytes[i:i+chunk])          # 5-byte slices
@@ -564,8 +563,8 @@ def bar_hex(pkt: bytes, chunk: int = 5) -> str:
     except Exception as e:
         print(f"{error_prefix}Error whilst parasing hex data: {e}")
 
-"""Read one packet at a time"""
 def read_one_packet(ser, timeout=1.0) -> bytes:
+    """Read one packet at a time"""
     start     = time.time()
     state     = 0          # 0 = want 0x5A, 1 = want 0xA5, 2 = have hdr
     hdr       = bytearray()
@@ -606,8 +605,8 @@ def read_one_packet(ser, timeout=1.0) -> bytes:
 
     return b''                         # timeout
 
-"""Decode the received packet in requesting data (Type 2)"""
 def decode_packet(packet: bytes) -> dict:
+    """Decode the received packet in requesting data (Type 2)"""
     try:
         if len(packet) < 7 or packet[0] != HEADER1 or packet[1] != HEADER2:
             print(f"{error_prefix}Invalid packet header")
@@ -630,8 +629,8 @@ def decode_packet(packet: bytes) -> dict:
         print(f"{error_prefix}Decoding failed: {e}")
         return None
 
-"""Parse the payload data from the decoded payload above"""
 def parse_payload(payload: str) -> tuple:
+    """Parse the payload data from the decoded payload above"""
     try:
         # Split payload into components
         parts = payload.split(',')
@@ -716,8 +715,8 @@ def polling_watchdog():
     _watchdog_id = root.after(POLL_INTERVAL_MS, polling_watchdog)
 
 # ──────────────── GUI File I/O ──────────────────────────────────────
-"""Save current settings to file"""
 def save_settings():
+    """Save current settings to file"""
     result = messagebox.askyesno("Save Settings", "This action will override the settings file, are you sure you want to proceed?")
     if not result:
         return
@@ -743,8 +742,8 @@ def save_settings():
         info_status(msg=f"Error whilst saving settings.", fg='red')
         messagebox.showerror("Error", f"Failed to save to {SETTING_FILE}: {e}")
 
-"""Load settings from file"""
 def load_settings():
+    """Load settings from file"""
     result = messagebox.askyesno("Load Settings", "This action will override the current colour sequeence settings, are you sure you want to proceed?")
     if not result:
         return
@@ -765,8 +764,8 @@ def load_settings():
         messagebox.showerror("Error", f"Failed to load from {SETTING_FILE}: {e}")
         return False
 
-"""Parent function to load new settings into the program and replaces the old one"""
 def set_data(new_settings, new_cycles):
+    """Parent function to load new settings into the program and replaces the old one"""
     try:
         while len(rows) > 0:
             delete_row(0)   
@@ -791,8 +790,8 @@ def set_data(new_settings, new_cycles):
         info_status(msg=f"Error whilst setting new data.", fg='red')
         messagebox.showerror("Error", f"Failed to set new data from {SETTING_FILE}: {e}")
 
-"""Save connection configuration to file"""
 def save_config(mode, com_port, bt_mac, time, poll=False):
+    """Save connection configuration to file"""
     try:
         with open(CONFIG_FILE, 'w') as f:
             f.write(f"USB_COM={com_port}\n")
@@ -807,8 +806,8 @@ def save_config(mode, com_port, bt_mac, time, poll=False):
             messagebox.showerror("Error", f"Error whilst saving {CONFIG_FILE}: {e}!") 
         info_status(msg=f"{attention_prefix}{e}", fg='red')
 
-"""Load connection configuration from file or return defaults"""
 def load_config():
+    """Load connection configuration from file or return defaults"""
     if not os.path.exists(CONFIG_FILE):
         return {"USB_COM": "", "BT_MAC": "", "MAX_LED_Time": default_time_allow}
     config = {"USB_COM": "", "BT_MAC": "", "MAX_LED_Time": default_time_allow}
@@ -834,8 +833,8 @@ def load_config():
     return config
 
 # ──────────────── GUI connection cfg ──────────────────────────────
-"""HELP FUNCTION: Shows instructions for finding ports/devices"""
 def show_help():
+    """HELP FUNCTION: Shows instructions for finding ports/devices"""
     help_text = f"""
         Help: How to find USB Serial Port / Bluetooth Host?
         
@@ -870,8 +869,8 @@ def show_help():
         """
     messagebox.showinfo("Connection Help", help_text)
 
-"""The code for the connection setting window"""
 def config_window():
+    """The code for the connection setting window"""
     config_win = tk.Toplevel(root)
     config_win.title(cfg_wintitle)
     config_win.resizable(False, False)
@@ -943,16 +942,16 @@ def config_window():
     config_win.wait_window(config_win)
     
 # ──────────────── GUI callbacks ─────────────────────────────────────
-"""Debugging: Printing out the values of rows and params"""
 def debug_print_value():
+    """Debugging: Printing out the values of rows and params"""
     print(f"====================")
     for i in range(len(rows)):
         print(f"{rows[i]['vars']['color'].get()}, {rows[i]['vars']['intensity'].get()}, {rows[i]['vars']['on_time'].get()}, {rows[i]['vars']['off_time'].get()}; ", end="")
     print(f"\ntotal_time: {total_time.get()}")
     print(f"\n{params} \n====================\n")
     
-"""Validate spinbox input and clamp to min/max values"""
 def validate_spinbox(var, min_val, max_val):
+    """Validate spinbox input and clamp to min/max values"""
     current = var.get()
     if current < min_val:
         info_status(msg=f"{attention_prefix}Minimum value reached! ({min_val})", fg='red')
@@ -962,8 +961,8 @@ def validate_spinbox(var, min_val, max_val):
         var.set(max_val)
     return True
 
-"""Synchronise params list when a widget variable changes."""
 def update_params(i, _=None):
+    """Synchronise params list when a widget variable changes."""
     if i >= len(params): return
     values = rows[i]['vars']
 
@@ -980,16 +979,16 @@ def update_params(i, _=None):
     update_total_time()
     debug_print_value()
 
-"""Update the color of the sliders when the color selection changes"""
 def update_row_style(i):
+    """Update the color of the sliders when the color selection changes"""
     if i >= len(rows): return
     style = colors_mapper.get(rows[i]['vars']['color'].get(), "secondary")
     rows[i]['widgets'][1].configure(bootstyle=style)  # Colour button
     rows[i]['widgets'][3].configure(bootstyle=style)  # On spinbox
     rows[i]['widgets'][4].configure(bootstyle=style)  # On scale
 
-"""Callback for the add row button"""
 def add_new_row():
+    """Callback for the add row button"""
     if len(rows) >= max_row:
         print(f"{info_prefix}maximum rows reached")
         info_status(msg=f"{attention_prefix}Maximum row reached! ({max_row})", fg='red')
@@ -1068,8 +1067,8 @@ def add_new_row():
     debug_print_value()
     #resize_trigger()
 
-"""Callback for the delete button on each row"""
 def delete_row_by_ref(row_ref):
+    """Callback for the delete button on each row"""
     # Find the row index by reference
     for i, row in enumerate(rows):
         if row['ref'] == row_ref:
@@ -1113,8 +1112,8 @@ def delete_row(i):
     debug_print_value()
     #resize_trigger()
 
-"""Callback for the send to ESP32 button"""
 def send_action():
+    """Callback for the send to ESP32 button"""
     # First, check cooldown
     global last_send_time
     current_time = time.time()
@@ -1151,8 +1150,8 @@ def send_action():
     else:  # Bluetooth mode
         threading.Thread(target=lambda: send_bluetooth(pkt), daemon=True).start()
 
-# Additional Function to update button status during cooldown
 def update_send_button():
+    """Additional Function to update button status during cooldown"""
     global last_send_time
     current_time = time.time()
     remaining = int(COOLDOWN - (current_time - last_send_time))
@@ -1162,8 +1161,8 @@ def update_send_button():
     else:
         send_btn.config(text=send_text, state="normal")
 
-"""Calculate the total time of all sequences"""
 def update_total_time():
+    """Calculate the total time of all sequences"""
     global total_time
     total_ms = 0
     for row in params:
@@ -1173,8 +1172,8 @@ def update_total_time():
     total_time.set(total_min)
     total_time_var.set(f"Total Time: {total_time.get():.2f} min")
 
-"""Update connection status indicators"""
 def update_status():
+    """Update connection status indicators"""
     mode_text = "USB" if mode_var.get() == 0 else "Bluetooth"
     mode_color = "info" if mode_var.get() == 0 else "primary"
     mode_indicator.config(text=mode_text, bootstyle=mode_color)
@@ -1186,8 +1185,8 @@ def update_status():
     if mode_var.get() == 1:
         set_poll_led(None)
 
-"""Update the status indicator text"""
 def info_status(msg="Unknown.", fg='grey', type=0):
+    """Update the status indicator text"""
     if type == 0:
         status_indicator.config(text=msg, foreground=fg)
     else:
